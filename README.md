@@ -2,7 +2,6 @@
 
 [![crates.io](https://img.shields.io/crates/v/okr.svg)](https://crates.io/crates/okr)
 [![CI tests](https://github.com/nanxstats/okr/actions/workflows/ci.yml/badge.svg)](https://github.com/nanxstats/okr/actions/workflows/ci.yml)
-[![Documentation](https://github.com/nanxstats/okr/actions/workflows/docs.yml/badge.svg)](https://nanx.me/okr/)
 
 > okr is not okr. It's okay-R: a context and provenance layer that makes R
 > projects legible to AI coding agents and reproducible for offline evaluation.
