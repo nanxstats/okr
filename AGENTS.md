@@ -8,7 +8,7 @@ follow `SPEC.md`.
 ## Project boundary
 
 `okr` is a Rust CLI that retrieves, organizes, and attests R package sources
-and arbitrary reference repositories for coding-agent context. It is not an R
+and arbitrary reference repositories for coding agent context. It is not an R
 package manager.
 
 Keep these invariants intact:
