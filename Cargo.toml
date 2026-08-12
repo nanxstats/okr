@@ -2,5 +2,27 @@
 name = "okr"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
+description = "To be added"
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/nanxstats/okr"
+documentation = "https://nanx.me/okr/"
+keywords = ["cli"]
+categories = ["command-line-utilities", "development-tools"]
+authors = ["Nan Xiao <me@nanx.me>"]
+exclude = [
+    "AGENTS.md",
+    "SPEC.md",
+    "vendor/",
+    "pyproject.toml",
+    "uv.lock",
+    ".python-version",
+    "site/",
+    "docs/",
+    "zensical.toml",
+]
 
 [dependencies]
+
+[dev-dependencies]
