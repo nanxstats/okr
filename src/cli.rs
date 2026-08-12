@@ -85,7 +85,7 @@ pub struct AddArgs {
     #[arg(required = true)]
     pub specs: Vec<String>,
 
-    /// Add entries under [references] instead of [packages].
+    /// Add entries under \\[references\\] instead of \\[packages\\].
     #[arg(long)]
     pub reference: bool,
 }
