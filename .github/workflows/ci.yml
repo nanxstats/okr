@@ -1,4 +1,4 @@
-name: Cargo Build & Test
+name: CI
 
 on:
   push:
@@ -8,17 +8,18 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build_and_test:
-    name: Rust project - latest
-    runs-on: ubuntu-latest
+  test:
+    name: stable / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        toolchain:
-          - stable
-          - beta
-          - nightly
+        os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v7
-      - run: rustup update ${{ matrix.toolchain }} && rustup default ${{ matrix.toolchain }}
-      - run: cargo build --verbose
-      - run: cargo test --verbose
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test
