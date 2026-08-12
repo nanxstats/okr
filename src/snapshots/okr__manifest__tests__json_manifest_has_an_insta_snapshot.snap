@@ -1,0 +1,40 @@
+---
+source: src/manifest.rs
+expression: "render(&config, &lock, &vendored).unwrap().json"
+---
+{
+  "schema": 1,
+  "environment_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "entries": [
+    {
+      "kind": "package",
+      "name": "tinyone",
+      "version": "1.0.0",
+      "commit": null,
+      "source": "cran",
+      "license": "MIT",
+      "path": "deps-src/tinyone",
+      "title": "First Tiny Fixture Package",
+      "tree-digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "tarball-sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "files": {
+        "DESCRIPTION": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    },
+    {
+      "kind": "reference",
+      "name": "standards",
+      "version": null,
+      "commit": "ffffffffffffffffffffffffffffffffffffffff",
+      "source": "git::ssh://example.test/standards.git",
+      "license": "Apache-2.0",
+      "path": "deps-src/standards",
+      "title": null,
+      "tree-digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "tarball-sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "files": {
+        "README.md": "3333333333333333333333333333333333333333333333333333333333333333"
+      }
+    }
+  ]
+}

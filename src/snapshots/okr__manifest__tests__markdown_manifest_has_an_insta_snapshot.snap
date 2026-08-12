@@ -1,0 +1,21 @@
+---
+source: src/manifest.rs
+expression: "render(&config, &lock, &vendored).unwrap().markdown"
+---
+# Vendored source manifest
+
+This tree contains generated, read-only R dependency sources and reference repositories for coding-agent context. Do not edit it directly; run `okr sync` to regenerate it.
+
+Environment digest: `sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`
+
+## Packages
+
+| Name | Version | Source | License | Path | Description |
+|---|---|---|---|---|---|
+| tinyone | 1.0.0 | cran | MIT | `deps-src/tinyone` | First Tiny Fixture Package |
+
+## References
+
+| Name | Commit | Source | License | Path | Description |
+|---|---|---|---|---|---|
+| standards | ffffffffffffffffffffffffffffffffffffffff | git::ssh://example.test/standards.git | Apache-2.0 | `deps-src/standards` | — |
