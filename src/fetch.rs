@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use flate2::{Compression, GzBuilder};
 use reqwest::blocking::Client;
+use serde::de::DeserializeOwned;
 use tar::{Builder as TarBuilder, Header};
 use tempfile::NamedTempFile;
 
@@ -356,6 +357,29 @@ impl Fetcher {
             )));
         }
         self.cache.put_reader(&key, &mut response, expected_sha256)
+    }
+
+    pub fn get_json<T: DeserializeOwned>(&self, url: &str, label: &str) -> Result<T> {
+        if self.offline {
+            return Err(Error::Fetch(format!(
+                "offline mode: cannot query {label} ({url})"
+            )));
+        }
+        let response = self
+            .client
+            .get(url)
+            .header("Accept", "application/json")
+            .send()
+            .map_err(|error| Error::Fetch(format!("could not query {label} at {url}: {error}")))?;
+        if !response.status().is_success() {
+            return Err(Error::Fetch(format!(
+                "could not query {label} at {url}: HTTP {}",
+                response.status()
+            )));
+        }
+        response
+            .json()
+            .map_err(|error| Error::Fetch(format!("invalid {label} response from {url}: {error}")))
     }
 }
 

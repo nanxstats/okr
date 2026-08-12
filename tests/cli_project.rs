@@ -117,6 +117,37 @@ strict=false # keep compact formatting
 }
 
 #[test]
+fn add_preserves_inline_package_and_reference_tables() {
+    let project = tempdir().unwrap();
+    let cache = project.path().join("cache");
+    let empty_path = project.path().join("empty-path");
+    fs::create_dir(&empty_path).unwrap();
+    fs::write(
+        project.path().join("okr.toml"),
+        "packages = { existing = \"*\" } # keep inline\nreferences = {}\n[project]\nsnapshot = \"2026-06-30\"\n",
+    )
+    .unwrap();
+
+    okr(project.path(), &cache, &empty_path)
+        .args(["add", "tinyone"])
+        .assert()
+        .success();
+    okr(project.path(), &cache, &empty_path)
+        .args(["add", "--reference", "git::file:///tmp/standards.git@main"])
+        .assert()
+        .success();
+
+    let updated = fs::read_to_string(project.path().join("okr.toml")).unwrap();
+    assert!(updated.contains("# keep inline"));
+    assert!(updated.contains("existing = \"*\""));
+    assert!(updated.contains("tinyone = \"*\""));
+    assert!(updated.contains("standards = \"git::file:///tmp/standards.git@main\""));
+    let parsed = okr::config::Config::parse(&updated).unwrap();
+    assert!(parsed.packages.contains_key("tinyone"));
+    assert!(parsed.references.contains_key("standards"));
+}
+
+#[test]
 fn status_reports_tools_freshness_integrity_cache_and_machine_json() {
     let project = tempdir().unwrap();
     let cache = project.path().join("cache");

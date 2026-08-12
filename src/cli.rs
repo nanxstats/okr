@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 use tempfile::NamedTempFile;
-use toml_edit::{DocumentMut, Item, Table, value};
+use toml_edit::{DocumentMut, Item, Table, Value, value};
 
 use crate::config::Config;
 use crate::fetch::{Cache, Fetcher};
@@ -239,27 +239,17 @@ fn run_add(config_path: &Path, args: &AddArgs, quiet: bool) -> Result<()> {
             }
             (raw.clone(), "*".into())
         };
-        if document[section]
-            .as_table()
-            .is_some_and(|table| table.contains_key(&name))
-        {
+        if editable_section_contains(&document, section, &name)? {
             return Err(Error::Config(format!(
                 "[{section}].{name} already exists; edit it directly to change its source"
             )));
         }
-        if document
-            .get(other_section)
-            .and_then(Item::as_table)
-            .is_some_and(|table| table.contains_key(&name))
-        {
+        if editable_section_contains(&document, other_section, &name)? {
             return Err(Error::Config(format!(
                 "entry name `{name}` already exists in [{other_section}]"
             )));
         }
-        document[section]
-            .as_table_mut()
-            .expect("new or validated source section must be a table")
-            .insert(&name, value(stored));
+        editable_section_insert(&mut document, section, &name, stored)?;
         added.push(name);
     }
 
@@ -272,6 +262,43 @@ fn run_add(config_path: &Path, args: &AddArgs, quiet: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn editable_section_contains(document: &DocumentMut, section: &str, name: &str) -> Result<bool> {
+    let Some(item) = document.get(section) else {
+        return Ok(false);
+    };
+    if let Some(table) = item.as_table() {
+        Ok(table.contains_key(name))
+    } else if let Some(table) = item.as_inline_table() {
+        Ok(table.contains_key(name))
+    } else {
+        Err(Error::Config(format!(
+            "`{section}` must be a TOML table or inline table"
+        )))
+    }
+}
+
+fn editable_section_insert(
+    document: &mut DocumentMut,
+    section: &str,
+    name: &str,
+    stored: String,
+) -> Result<()> {
+    let item = document
+        .get_mut(section)
+        .ok_or_else(|| Error::Config(format!("missing [{section}] section while applying edit")))?;
+    if let Some(table) = item.as_table_mut() {
+        table.insert(name, value(stored));
+        Ok(())
+    } else if let Some(table) = item.as_inline_table_mut() {
+        table.insert(name, Value::from(stored));
+        Ok(())
+    } else {
+        Err(Error::Config(format!(
+            "`{section}` must be a TOML table or inline table"
+        )))
+    }
 }
 
 fn run_status(config_path: &Path, json: bool, quiet: bool, _verbose: bool) -> Result<()> {

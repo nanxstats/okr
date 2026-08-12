@@ -333,32 +333,65 @@ fn acquire_github_api_tarball(
     commit: &str,
     expected_sha256: Option<&str>,
 ) -> Result<CachedArtifact> {
+    let mut failures = Vec::new();
     if tools.gh_authenticated() {
-        return acquire_with_gh(fetcher, tools, github, commit, expected_sha256);
+        match acquire_with_gh(fetcher, tools, github, commit, expected_sha256) {
+            Ok(artifact) => return Ok(artifact),
+            Err(error) => failures.push(format!("gh: {error}")),
+        }
     }
-    if let Ok(token) = env::var("GITHUB_TOKEN")
-        && !token.is_empty()
+    let url = github_api_tarball_url(github, commit);
+    if let Some(token) = env::var("GITHUB_TOKEN")
+        .ok()
+        .filter(|token| !token.is_empty())
     {
-        let api = if github.host == "github.com" {
-            "https://api.github.com".to_owned()
-        } else {
-            format!("https://{}/api/v3", github.host)
-        };
-        let url = format!(
-            "{api}/repos/{}/{}/tarball/{commit}",
-            github.owner, github.repo
-        );
-        return fetcher.fetch_url_with_bearer(
+        match fetcher.fetch_url_with_bearer(
             &url,
             &token,
             expected_sha256,
-            &format!("private GitHub archive {}/{}", github.owner, github.repo),
-        );
+            &format!("GitHub API archive {}/{}", github.owner, github.repo),
+        ) {
+            Ok(artifact) => return Ok(artifact),
+            Err(error) => failures.push(format!("token REST: {error}")),
+        }
     }
-    Err(Error::Fetch(
-        "private GitHub archive access needs authenticated `gh` (`gh auth login`) or GITHUB_TOKEN"
-            .into(),
-    ))
+    fetcher
+        .fetch_url(
+            &url,
+            expected_sha256,
+            &format!(
+                "anonymous GitHub API archive {}/{}",
+                github.owner, github.repo
+            ),
+        )
+        .map_err(|error| {
+            let rest_error = if error.to_string().contains("HTTP 403") {
+                format!("{error}; install `gh` and run `gh auth login`, or set GITHUB_TOKEN")
+            } else {
+                error.to_string()
+            };
+            if failures.is_empty() {
+                Error::Fetch(rest_error)
+            } else {
+                failures.push(format!("anonymous REST: {rest_error}"));
+                Error::Fetch(format!(
+                    "GitHub archive fetch exhausted all available tiers: {}",
+                    failures.join("; ")
+                ))
+            }
+        })
+}
+
+fn github_api_tarball_url(github: &GithubRepository, commit: &str) -> String {
+    let api = if github.host == "github.com" {
+        "https://api.github.com".to_owned()
+    } else {
+        format!("https://{}/api/v3", github.host)
+    };
+    format!(
+        "{api}/repos/{}/{}/tarball/{commit}",
+        github.owner, github.repo
+    )
 }
 
 fn clone_source(
@@ -594,7 +627,11 @@ fn metadata(
                 description.get("Title").map(fold_one_line),
             ))
         }
-        EntryKind::Reference => Ok((None, detect_reference_license(directory)?, None)),
+        EntryKind::Reference => Ok((
+            None,
+            detect_reference_license(directory)?,
+            reference_title(directory),
+        )),
     }
 }
 
@@ -617,14 +654,21 @@ fn detect_reference_license(directory: &Path) -> Result<Option<String>> {
     let Some(candidate) = candidates.first() else {
         return Ok(None);
     };
-    if !candidate.file_type()?.is_file() {
+    if !candidate
+        .file_type()
+        .is_ok_and(|file_type| file_type.is_file())
+    {
         return Ok(None);
     }
-    let mut contents = String::new();
-    File::open(candidate.path())?
-        .take(128 * 1024)
-        .read_to_string(&mut contents)?;
-    let lower = contents.to_ascii_lowercase();
+    let fallback = candidate.file_name().to_string_lossy().into_owned();
+    let Ok(file) = File::open(candidate.path()) else {
+        return Ok(Some(fallback));
+    };
+    let mut contents = Vec::new();
+    if file.take(128 * 1024).read_to_end(&mut contents).is_err() {
+        return Ok(Some(fallback));
+    }
+    let lower = String::from_utf8_lossy(&contents).to_ascii_lowercase();
     let detected = if lower.contains("permission is hereby granted, free of charge") {
         "MIT".to_owned()
     } else if lower.contains("apache license") && lower.contains("version 2.0") {
@@ -632,9 +676,17 @@ fn detect_reference_license(directory: &Path) -> Result<Option<String>> {
     } else if lower.contains("gnu general public license") {
         "GPL".to_owned()
     } else {
-        candidate.file_name().to_string_lossy().into_owned()
+        fallback
     };
     Ok(Some(detected))
+}
+
+pub(crate) fn reference_title(directory: &Path) -> Option<String> {
+    let contents = fs::read_to_string(directory.join("DESCRIPTION")).ok()?;
+    dcf::parse_one(&contents)
+        .ok()?
+        .get("Title")
+        .map(fold_one_line)
 }
 
 fn clone_cache_key(entry: &ResolvedEntry) -> String {
@@ -679,12 +731,60 @@ mod tests {
     use tempfile::tempdir;
     use xshell::{Shell, cmd};
 
-    use super::vendor;
+    use super::{detect_reference_license, github_api_tarball_url, reference_title, vendor};
     use crate::config::Config;
     use crate::fetch::{Cache, Fetcher};
     use crate::hosttools::HostTools;
     use crate::lock::FetchMethod;
-    use crate::resolve::{Resolution, ResolvedEntry, ResolvedSource};
+    use crate::resolve::{GithubRepository, Resolution, ResolvedEntry, ResolvedSource};
+
+    #[test]
+    fn github_api_archive_urls_cover_dotcom_and_enterprise() {
+        let commit = "a".repeat(40);
+        assert_eq!(
+            github_api_tarball_url(
+                &GithubRepository {
+                    host: "github.com".into(),
+                    owner: "org".into(),
+                    repo: "repo".into(),
+                },
+                &commit,
+            ),
+            format!("https://api.github.com/repos/org/repo/tarball/{commit}")
+        );
+        assert_eq!(
+            github_api_tarball_url(
+                &GithubRepository {
+                    host: "github.corp.example".into(),
+                    owner: "org".into(),
+                    repo: "repo".into(),
+                },
+                &commit,
+            ),
+            format!("https://github.corp.example/api/v3/repos/org/repo/tarball/{commit}")
+        );
+    }
+
+    #[test]
+    fn reference_metadata_detection_is_best_effort() {
+        let directory = tempdir().unwrap();
+        fs::write(
+            directory.path().join("DESCRIPTION"),
+            "Package: contextual\nTitle: Context for\n  Agents\n",
+        )
+        .unwrap();
+        fs::write(directory.path().join("LICENSE.binary"), [0xff, 0xfe]).unwrap();
+        assert_eq!(
+            reference_title(directory.path()).as_deref(),
+            Some("Context for Agents")
+        );
+        assert_eq!(
+            detect_reference_license(directory.path())
+                .unwrap()
+                .as_deref(),
+            Some("LICENSE.binary")
+        );
+    }
 
     #[test]
     fn package_tarball_is_stripped_pruned_and_described() {

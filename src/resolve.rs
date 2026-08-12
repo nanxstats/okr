@@ -212,29 +212,23 @@ impl<'a> TieredGithubApi<'a> {
         })
     }
 
-    fn via_http(&self, owner: &str, repo: &str) -> Result<GithubRelease> {
-        let token = env::var("GITHUB_TOKEN")
-            .ok()
-            .filter(|value| !value.is_empty());
-        let host = env::var("GH_HOST").unwrap_or_else(|_| "github.com".into());
-        let host = host.trim_end_matches('/');
+    fn via_http(&self, owner: &str, repo: &str, token: Option<&str>) -> Result<GithubRelease> {
+        let host = configured_github_host();
         let base = if host == "github.com" {
             "https://api.github.com".to_owned()
-        } else if host.starts_with("http://") || host.starts_with("https://") {
-            format!("{host}/api/v3")
         } else {
             format!("https://{host}/api/v3")
         };
         let release: ReleaseResponse = self.get_json(
             &format!("{base}/repos/{owner}/{repo}/releases/latest"),
-            token.as_deref(),
+            token,
         )?;
         let commit: CommitResponse = self.get_json(
             &format!(
                 "{base}/repos/{owner}/{repo}/commits/{}",
                 encode_path_segment(&release.tag_name)
             ),
-            token.as_deref(),
+            token,
         )?;
         validate_api_commit(&commit.sha)?;
         Ok(GithubRelease {
@@ -279,11 +273,33 @@ impl<'a> TieredGithubApi<'a> {
 
 impl GithubReleaseApi for TieredGithubApi<'_> {
     fn latest_release(&self, owner: &str, repo: &str) -> Result<GithubRelease> {
+        let mut failures = Vec::new();
         if self.tools.gh_authenticated() {
-            self.via_gh(owner, repo)
-        } else {
-            self.via_http(owner, repo)
+            match self.via_gh(owner, repo) {
+                Ok(release) => return Ok(release),
+                Err(error) => failures.push(format!("gh: {error}")),
+            }
         }
+        if let Some(token) = env::var("GITHUB_TOKEN")
+            .ok()
+            .filter(|value| !value.is_empty())
+        {
+            match self.via_http(owner, repo, Some(&token)) {
+                Ok(release) => return Ok(release),
+                Err(error) => failures.push(format!("token REST: {error}")),
+            }
+        }
+        self.via_http(owner, repo, None).map_err(|error| {
+            if failures.is_empty() {
+                error
+            } else {
+                failures.push(format!("anonymous REST: {error}"));
+                Error::Fetch(format!(
+                    "GitHub release lookup exhausted all available tiers: {}",
+                    failures.join("; ")
+                ))
+            }
+        })
     }
 }
 
@@ -295,6 +311,16 @@ struct ReleaseResponse {
 #[derive(serde::Deserialize)]
 struct CommitResponse {
     sha: String,
+}
+
+#[derive(serde::Deserialize)]
+struct GitlabCommitResponse {
+    id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct BitbucketCommitResponse {
+    hash: String,
 }
 
 /// Resolve all declared entries without performing dependency solving.
@@ -440,7 +466,7 @@ fn resolve_remote_entry(
     let prior = previous_remote(previous, declaration.kind, &declaration.name)
         .filter(|prior| prior.source() == source_id);
     let requested_ref = spec.ref_name().map(str::to_owned);
-    let (commit, locked_ref, branch_ref) = match &spec.reference {
+    let (commit, locked_ref, warn_named_ref) = match &spec.reference {
         Some(RemoteRef::Named(reference)) if is_full_commit_sha(reference) => (
             reference.to_ascii_lowercase(),
             Some(reference.clone()),
@@ -475,14 +501,38 @@ fn resolve_remote_entry(
             (release.commit, Some(release.tag), false)
         }
         Some(RemoteRef::Named(reference)) => {
-            let resolved = tools.git_ls_remote(&clone_url, Some(reference))?;
-            let branch = resolved.matched_ref.starts_with("refs/heads/");
-            (resolved.commit, Some(reference.clone()), branch)
+            match tools.git_ls_remote(&clone_url, Some(reference)) {
+                Ok(resolved) => {
+                    let branch = resolved.matched_ref.starts_with("refs/heads/");
+                    (resolved.commit, Some(reference.clone()), branch)
+                }
+                Err(git_error) => {
+                    let commit = resolve_public_forge_ref(fetcher, spec, reference).map_err(
+                        |api_error| {
+                            Error::Fetch(format!(
+                                "could not resolve {} at {reference}: git ls-remote failed ({git_error}); public forge API fallback failed ({api_error})",
+                                declaration.name
+                            ))
+                        },
+                    )?;
+                    (commit, Some(reference.clone()), true)
+                }
+            }
         }
-        None => {
-            let resolved = tools.git_ls_remote(&clone_url, None)?;
-            (resolved.commit, None, true)
-        }
+        None => match tools.git_ls_remote(&clone_url, None) {
+            Ok(resolved) => (resolved.commit, None, true),
+            Err(git_error) => {
+                let commit = resolve_public_forge_ref(fetcher, spec, "HEAD").map_err(
+                        |api_error| {
+                            Error::Fetch(format!(
+                                "could not resolve the default branch for {}: git ls-remote failed ({git_error}); public forge API fallback failed ({api_error})",
+                                declaration.name
+                            ))
+                        },
+                    )?;
+                (commit, None, true)
+            }
+        },
     };
 
     if spec.reference.is_none() {
@@ -490,9 +540,9 @@ fn resolve_remote_entry(
             "{} has no ref; the default branch resolved to {} and that SHA will be locked",
             declaration.name, commit
         ));
-    } else if branch_ref {
+    } else if warn_named_ref {
         warnings.push(format!(
-            "{} uses branch ref {}; it resolved to {} and that SHA will be locked",
+            "{} uses ref {}; it resolved to {} and that SHA will be locked",
             declaration.name,
             requested_ref.as_deref().unwrap_or("HEAD"),
             commit
@@ -520,6 +570,66 @@ fn resolve_remote_entry(
             .map(str::to_owned),
         preferred_fetch_method: matching_prior.map(PriorRemote::fetch_method),
     })
+}
+
+fn resolve_public_forge_ref(
+    fetcher: &Fetcher,
+    spec: &RemoteSpec,
+    reference: &str,
+) -> Result<String> {
+    let RemoteLocation::Forge { owner, repo } = &spec.location else {
+        return Err(Error::Fetch(
+            "this source requires git; install `git` or pin and cache it before using --offline"
+                .into(),
+        ));
+    };
+    let encoded_owner = encode_path_segment(owner);
+    let encoded_repo = encode_path_segment(repo);
+    let encoded_ref = encode_path_segment(reference);
+    let commit = match spec.remote_type {
+        RemoteType::Github => {
+            let host = configured_github_host();
+            if host != "github.com" {
+                return Err(Error::Fetch(format!(
+                    "GitHub Enterprise source on {host} requires git or authenticated GitHub access"
+                )));
+            }
+            let response: CommitResponse = fetcher.get_json(
+                &format!(
+                    "https://api.github.com/repos/{encoded_owner}/{encoded_repo}/commits/{encoded_ref}"
+                ),
+                "GitHub commit metadata",
+            )?;
+            response.sha
+        }
+        RemoteType::Gitlab => {
+            let project = encode_path_segment(&format!("{owner}/{repo}"));
+            let response: GitlabCommitResponse = fetcher.get_json(
+                &format!(
+                    "https://gitlab.com/api/v4/projects/{project}/repository/commits/{encoded_ref}"
+                ),
+                "GitLab commit metadata",
+            )?;
+            response.id
+        }
+        RemoteType::Bitbucket => {
+            let response: BitbucketCommitResponse = fetcher.get_json(
+                &format!(
+                    "https://api.bitbucket.org/2.0/repositories/{encoded_owner}/{encoded_repo}/commit/{encoded_ref}"
+                ),
+                "Bitbucket commit metadata",
+            )?;
+            response.hash
+        }
+        RemoteType::Git | RemoteType::Url => {
+            return Err(Error::Fetch(
+                "this source requires git; install `git` or pin and cache it before using --offline"
+                    .into(),
+            ));
+        }
+    };
+    validate_api_commit(&commit)?;
+    Ok(commit.to_ascii_lowercase())
 }
 
 fn source_id(spec: &RemoteSpec) -> String {
@@ -760,7 +870,8 @@ mod tests {
 
     use super::{
         GithubApiMethod, GithubRelease, GithubReleaseApi, GithubRepository, ResolvedSource,
-        SnapshotIndex, archive_for, encode_path_segment, resolve, split_git_host_path,
+        SnapshotIndex, archive_for, encode_path_segment, resolve, resolve_public_forge_ref,
+        split_git_host_path,
     };
     use crate::config::Config;
     use crate::fetch::{Cache, Fetcher};
@@ -949,5 +1060,26 @@ mod tests {
             Some(("gitlab.com".into(), "org/repo.git".into()))
         );
         assert_eq!(encode_path_segment("release/1 +2"), "release%2F1%20%2B2");
+    }
+
+    #[test]
+    fn public_forge_api_fallback_urls_are_tested_offline() {
+        let directory = tempdir().unwrap();
+        let fetcher = Fetcher::new(Cache::new(directory.path()), true).unwrap();
+        let cases = [
+            (
+                "gitlab::org/repo@release/1",
+                "https://gitlab.com/api/v4/projects/org%2Frepo/repository/commits/release%2F1",
+            ),
+            (
+                "bitbucket::org/repo@release/1",
+                "https://api.bitbucket.org/2.0/repositories/org/repo/commit/release%2F1",
+            ),
+        ];
+        for (raw, expected_url) in cases {
+            let spec = crate::spec::RemoteSpec::parse(raw).unwrap();
+            let error = resolve_public_forge_ref(&fetcher, &spec, "release/1").unwrap_err();
+            assert!(error.to_string().contains(expected_url), "{error}");
+        }
     }
 }

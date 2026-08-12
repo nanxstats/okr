@@ -144,7 +144,9 @@ fn file_git_reference_rebuilds_offline_from_the_normalized_clone_cache() {
         .arg("sync")
         .assert()
         .success();
+    let first_lock = fs::read(project.path().join("okr.lock")).unwrap();
     let first_manifest = fs::read(project.path().join("deps-src/_manifest.json")).unwrap();
+    let first_markdown = fs::read(project.path().join("deps-src/_manifest.md")).unwrap();
     fs::remove_dir_all(project.path().join("deps-src")).unwrap();
     fs::remove_dir_all(&repository).unwrap();
     let empty_path = project.path().join("empty-path");
@@ -155,8 +157,16 @@ fn file_git_reference_rebuilds_offline_from_the_normalized_clone_cache() {
         .assert()
         .success();
     assert_eq!(
+        fs::read(project.path().join("okr.lock")).unwrap(),
+        first_lock
+    );
+    assert_eq!(
         fs::read(project.path().join("deps-src/_manifest.json")).unwrap(),
         first_manifest
+    );
+    assert_eq!(
+        fs::read(project.path().join("deps-src/_manifest.md")).unwrap(),
+        first_markdown
     );
     assert!(
         project

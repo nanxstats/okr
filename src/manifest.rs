@@ -70,6 +70,11 @@ pub fn render(config: &Config, lock: &Lockfile, vendored: &VendorResult) -> Resu
         });
     }
     for reference in &lock.references {
+        let title = vendored
+            .entries
+            .iter()
+            .find(|entry| entry.kind == EntryKind::Reference && entry.name == reference.name)
+            .and_then(|entry| entry.title.clone());
         entries.push(JsonEntry {
             kind: EntryKind::Reference,
             name: reference.name.clone(),
@@ -78,7 +83,7 @@ pub fn render(config: &Config, lock: &Lockfile, vendored: &VendorResult) -> Resu
             source: reference.source.clone(),
             license: reference.license.clone(),
             path: format!("{vendor_path}/{}", reference.name),
-            title: None,
+            title,
             tree_digest: reference.tree_digest.clone(),
             tarball_sha256: reference.tarball_sha256.clone(),
             files: reference.files.clone(),
@@ -143,12 +148,13 @@ pub(crate) fn render_for_verification(
         });
     }
     for reference in &lock.references {
+        let title = crate::vendor::reference_title(&root.join(&reference.name));
         entries.push(crate::vendor::VendoredEntry {
             name: reference.name.clone(),
             kind: EntryKind::Reference,
             version: None,
             license: reference.license.clone(),
-            title: None,
+            title,
             fetch_method: reference.fetch_method,
             artifact_sha256: reference.tarball_sha256.clone().unwrap_or_default(),
             tree: TreeDigest {
@@ -253,13 +259,20 @@ fn render_markdown(config: &Config, lock: &Lockfile, vendored: &VendorResult) ->
         "\n## References\n\n| Name | Commit | Source | License | Path | Description |\n|---|---|---|---|---|---|\n",
     );
     for reference in &lock.references {
+        let title = vendored
+            .entries
+            .iter()
+            .find(|entry| entry.kind == EntryKind::Reference && entry.name == reference.name)
+            .and_then(|entry| entry.title.as_deref())
+            .unwrap_or("—");
         markdown.push_str(&format!(
-            "| {} | {} | {} | {} | `{vendor_path}/{}` | — |\n",
+            "| {} | {} | {} | {} | `{vendor_path}/{}` | {} |\n",
             markdown_cell(&reference.name),
             markdown_cell(reference.commit.as_deref().unwrap_or("—")),
             markdown_cell(&reference.source),
             markdown_cell(reference.license.as_deref().unwrap_or("—")),
             reference.name,
+            markdown_cell(title),
         ));
     }
     Ok(markdown)
@@ -453,6 +466,15 @@ mod tests {
     fn json_manifest_has_an_insta_snapshot() {
         let (config, lock, vendored) = fixture();
         insta::assert_snapshot!(render(&config, &lock, &vendored).unwrap().json);
+    }
+
+    #[test]
+    fn reference_description_is_rendered_when_available() {
+        let (config, lock, mut vendored) = fixture();
+        vendored.entries[1].title = Some("Protocol templates".into());
+        let output = render(&config, &lock, &vendored).unwrap();
+        assert!(output.json.contains("\"title\": \"Protocol templates\""));
+        assert!(output.markdown.contains("| Protocol templates |"));
     }
 
     #[test]

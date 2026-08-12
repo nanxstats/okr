@@ -23,8 +23,6 @@ pub enum Error {
     Fetch(String),
     #[error("{0}")]
     Verification(String),
-    #[error("{0}")]
-    NotImplemented(String),
     #[error(transparent)]
     Io(#[from] std::io::Error),
 }
@@ -37,7 +35,7 @@ impl Error {
             Self::Config(_) | Self::Spec(_) => 2,
             Self::Fetch(_) => 3,
             Self::Verification(_) => 4,
-            Self::NotImplemented(_) | Self::Io(_) => 1,
+            Self::Io(_) => 1,
         }
     }
 }
@@ -54,6 +52,5 @@ mod tests {
         assert_eq!(Error::Spec(String::new()).exit_code(), 2);
         assert_eq!(Error::Fetch(String::new()).exit_code(), 3);
         assert_eq!(Error::Verification(String::new()).exit_code(), 4);
-        assert_eq!(Error::NotImplemented(String::new()).exit_code(), 1);
     }
 }
