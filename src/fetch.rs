@@ -193,10 +193,10 @@ impl Cache {
                     target.display()
                 )));
             }
-        } else if let Err(error) = temporary.persist_noclobber(&target) {
-            if !target.try_exists()? {
-                return Err(Error::Io(error.error));
-            }
+        } else if let Err(error) = temporary.persist_noclobber(&target)
+            && !target.try_exists()?
+        {
+            return Err(Error::Io(error.error));
         }
 
         self.write_reference(key, &digest)?;

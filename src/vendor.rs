@@ -339,8 +339,13 @@ fn acquire_github_api_tarball(
     if let Ok(token) = env::var("GITHUB_TOKEN")
         && !token.is_empty()
     {
+        let api = if github.host == "github.com" {
+            "https://api.github.com".to_owned()
+        } else {
+            format!("https://{}/api/v3", github.host)
+        };
         let url = format!(
-            "https://api.github.com/repos/{}/{}/tarball/{commit}",
+            "{api}/repos/{}/{}/tarball/{commit}",
             github.owner, github.repo
         );
         return fetcher.fetch_url_with_bearer(

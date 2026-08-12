@@ -60,6 +60,7 @@ pub enum ResolvedSource {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GithubRepository {
+    pub host: String,
     pub owner: String,
     pub repo: String,
 }
@@ -535,8 +536,9 @@ fn source_id(spec: &RemoteSpec) -> String {
 fn git_location(spec: &RemoteSpec) -> Result<(String, Option<GithubRepository>)> {
     match (&spec.remote_type, &spec.location) {
         (RemoteType::Github, RemoteLocation::Forge { owner, repo }) => Ok((
-            format!("https://github.com/{owner}/{repo}.git"),
+            format!("https://{}/{owner}/{repo}.git", configured_github_host()),
             Some(GithubRepository {
+                host: configured_github_host(),
                 owner: owner.clone(),
                 repo: repo.clone(),
             }),
@@ -561,10 +563,13 @@ fn archive_for(
     commit: &str,
 ) -> (Option<String>, Option<GithubRepository>) {
     if let Some(github) = known_github {
+        if github.host != "github.com" {
+            return (None, Some(github.clone()));
+        }
         return (
             Some(format!(
-                "https://github.com/{}/{}/archive/{commit}.tar.gz",
-                github.owner, github.repo
+                "https://{}/{}/{}/archive/{commit}.tar.gz",
+                github.host, github.owner, github.repo
             )),
             Some(github.clone()),
         );
@@ -583,6 +588,7 @@ fn archive_for(
                 return (None, None);
             };
             let github = GithubRepository {
+                host: "github.com".into(),
                 owner: owner.to_owned(),
                 repo: repo.to_owned(),
             };
@@ -613,6 +619,19 @@ fn archive_for(
         ),
         _ => (None, None),
     }
+}
+
+fn configured_github_host() -> String {
+    env::var("GH_HOST")
+        .ok()
+        .filter(|host| !host.is_empty())
+        .map(|host| {
+            host.trim_start_matches("https://")
+                .trim_start_matches("http://")
+                .trim_end_matches('/')
+                .to_owned()
+        })
+        .unwrap_or_else(|| "github.com".into())
 }
 
 fn split_git_host_path(url: &str) -> Option<(String, String)> {
@@ -740,8 +759,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        GithubApiMethod, GithubRelease, GithubReleaseApi, ResolvedSource, SnapshotIndex,
-        archive_for, encode_path_segment, resolve, split_git_host_path,
+        GithubApiMethod, GithubRelease, GithubReleaseApi, GithubRepository, ResolvedSource,
+        SnapshotIndex, archive_for, encode_path_segment, resolve, split_git_host_path,
     };
     use crate::config::Config;
     use crate::fetch::{Cache, Fetcher};
@@ -905,6 +924,18 @@ mod tests {
             assert_eq!(archive_for(url, None, &sha).0.as_deref(), Some(expected));
         }
         assert_eq!(archive_for("file:///tmp/repo", None, &sha).0, None);
+        let enterprise = GithubRepository {
+            host: "github.corp.example".into(),
+            owner: "org".into(),
+            repo: "repo".into(),
+        };
+        let plan = archive_for(
+            "https://github.corp.example/org/repo.git",
+            Some(&enterprise),
+            &sha,
+        );
+        assert_eq!(plan.0, None);
+        assert_eq!(plan.1, Some(enterprise));
     }
 
     #[test]

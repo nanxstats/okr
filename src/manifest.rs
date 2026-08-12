@@ -8,7 +8,9 @@ use serde::Serialize;
 use tempfile::NamedTempFile;
 
 use crate::config::{Config, EntryKind};
+use crate::digest::TreeDigest;
 use crate::lock::Lockfile;
+use crate::resolve::dcf;
 use crate::vendor::VendorResult;
 use crate::{Error, Result};
 
@@ -106,6 +108,64 @@ pub fn write_manifests(
     atomic_write(&vendored.root.join("_manifest.json"), &output.json)?;
     atomic_write(&vendored.root.join("_manifest.md"), &output.markdown)?;
     Ok(output)
+}
+
+/// Reconstruct the expected manifests from the lock and intact package
+/// metadata so `verify` also covers the generated files at the vendor root.
+pub(crate) fn render_for_verification(
+    config: &Config,
+    lock: &Lockfile,
+    root: &Path,
+) -> Result<ManifestOutput> {
+    let mut entries = Vec::with_capacity(lock.packages.len() + lock.references.len());
+    for package in &lock.packages {
+        let description = fs::read_to_string(root.join(&package.name).join("DESCRIPTION"))?;
+        let record = dcf::parse_one(&description).map_err(|error| {
+            Error::Verification(format!(
+                "cannot reconstruct manifest metadata for {}: {error}",
+                package.name
+            ))
+        })?;
+        entries.push(crate::vendor::VendoredEntry {
+            name: package.name.clone(),
+            kind: EntryKind::Package,
+            version: Some(package.version.clone()),
+            license: package.license.clone(),
+            title: record
+                .get("Title")
+                .map(|title| title.split_whitespace().collect::<Vec<_>>().join(" ")),
+            fetch_method: package.fetch_method,
+            artifact_sha256: package.tarball_sha256.clone().unwrap_or_default(),
+            tree: TreeDigest {
+                digest: package.tree_digest.clone(),
+                files: package.files.clone(),
+            },
+        });
+    }
+    for reference in &lock.references {
+        entries.push(crate::vendor::VendoredEntry {
+            name: reference.name.clone(),
+            kind: EntryKind::Reference,
+            version: None,
+            license: reference.license.clone(),
+            title: None,
+            fetch_method: reference.fetch_method,
+            artifact_sha256: reference.tarball_sha256.clone().unwrap_or_default(),
+            tree: TreeDigest {
+                digest: reference.tree_digest.clone(),
+                files: reference.files.clone(),
+            },
+        });
+    }
+    render(
+        config,
+        lock,
+        &VendorResult {
+            root: root.to_owned(),
+            entries,
+            warnings: Vec::new(),
+        },
+    )
 }
 
 pub fn update_agents_file(project_directory: &Path, config: &Config) -> Result<()> {

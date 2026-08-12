@@ -21,7 +21,12 @@ use crate::vendor::vendor;
 use crate::{Error, Result};
 
 #[derive(Debug, Parser)]
-#[command(name = "okr", version, about)]
+#[command(
+    name = "okr",
+    version,
+    about,
+    after_long_help = "Examples:\n  okr init\n  okr add pharmaverse/admiral@v1.3.0\n  okr sync\n  okr verify --strict --json\n\nokr retrieves and verifies source context. It never installs R or R packages."
+)]
 pub struct Cli {
     /// Path to the project configuration.
     #[arg(long, global = true, default_value = "okr.toml")]
@@ -35,7 +40,7 @@ pub struct Cli {
     #[arg(long, global = true, conflicts_with = "quiet")]
     pub verbose: bool,
 
-    /// Emit schema-versioned JSON where the command supports it.
+    /// Emit schema-versioned JSON for status or verify.
     #[arg(long, global = true)]
     pub json: bool,
 
@@ -52,12 +57,15 @@ pub enum Command {
     /// Resolve, fetch, vendor, lock, and diagnose the project.
     Sync(SyncArgs),
     /// Report project, tool, cache, and coherence status.
-    Status,
+    Status(StatusArgs),
     /// Verify the full vendored tree against the lockfile.
     Verify(VerifyArgs),
 }
 
 #[derive(Debug, Args)]
+#[command(
+    after_long_help = "Profiles are planned for milestone 0.2. Omit --profile to write the milestone 0.1 template."
+)]
 pub struct InitArgs {
     /// Profile name or path (profiles arrive in milestone 0.2).
     #[arg(long)]
@@ -69,6 +77,9 @@ pub struct InitArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(
+    after_long_help = "Examples:\n  okr add rpact\n  okr add pharmaverse/admiral@v1.3.0\n  okr add github::tidyverse/ggplot2\n  okr add r-lib/testthat@*release\n  okr add gitlab::jimhester/covr@abc123\n  okr add bitbucket::sulab/mygene.r@default\n  okr add git::git@ghe.example:stats/simlib.git@v2.1\n  okr add --reference git::https://codeberg.org/org/protocols.git@main\n\nDirect url:: tarballs require table form in okr.toml so a sha256 can be declared. Bare names such as `rpact` add a CRAN `*` entry and require project.snapshot."
+)]
 pub struct AddArgs {
     /// Source specifications to add.
     #[arg(required = true)]
@@ -80,6 +91,9 @@ pub struct AddArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(
+    after_long_help = "Examples:\n  okr sync\n  okr sync --offline\n  okr sync --strict\n\n--offline performs no downloads or clones. It requires the resolved artifacts in the content-addressed cache."
+)]
 pub struct SyncArgs {
     /// Prohibit network and clone operations; require cache hits.
     #[arg(long)]
@@ -91,6 +105,15 @@ pub struct SyncArgs {
 }
 
 #[derive(Debug, Args)]
+#[command(
+    after_long_help = "Examples:\n  okr status\n  okr status --json\n\nStatus is diagnostic: it never installs or changes R packages. project.strict makes an installed-library mismatch exit 4."
+)]
+pub struct StatusArgs {}
+
+#[derive(Debug, Args)]
+#[command(
+    after_long_help = "Examples:\n  okr verify\n  okr verify --json\n  okr verify --strict --json\n\nTree drift is always fatal (exit 4). --strict additionally makes installed-library coherence drift fatal."
+)]
 pub struct VerifyArgs {
     /// Also require installed-library coherence.
     #[arg(long)]
@@ -119,7 +142,7 @@ pub fn run(cli: Cli) -> Result<()> {
             reject_json(json, "add")?;
             run_add(&config, &arguments, quiet)
         }
-        Command::Status => run_status(&config, json, quiet, verbose),
+        Command::Status(_) => run_status(&config, json, quiet, verbose),
     }
 }
 

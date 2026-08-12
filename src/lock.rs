@@ -389,6 +389,7 @@ pub fn verify_vendor(
         );
     }
     verify_root_entries(&root, root_exists, lock, &mut mismatches);
+    verify_manifests(&root, root_exists, config, lock, &mut mismatches);
     mismatches.sort_by(|left, right| {
         (
             &left.entry_kind,
@@ -559,6 +560,67 @@ fn verify_root_entries(
             None,
             Some("unlocked root entry".into()),
         ));
+    }
+}
+
+fn verify_manifests(
+    root: &Path,
+    root_exists: bool,
+    config: &Config,
+    lock: &Lockfile,
+    mismatches: &mut Vec<FileMismatch>,
+) {
+    if !root_exists {
+        return;
+    }
+    let rendered = match crate::manifest::render_for_verification(config, lock, root) {
+        Ok(rendered) => rendered,
+        Err(error) => {
+            mismatches.push(file_mismatch(
+                "manifest",
+                "deps-src",
+                ".",
+                MismatchKind::Unreadable,
+                Some("manifests reconstructable from locked metadata".into()),
+                Some(error.to_string()),
+            ));
+            return;
+        }
+    };
+    for (name, expected) in [
+        ("_manifest.json", rendered.json),
+        ("_manifest.md", rendered.markdown),
+    ] {
+        let path = root.join(name);
+        match fs::read_to_string(path) {
+            Ok(actual) if actual == expected => {}
+            Ok(actual) => mismatches.push(file_mismatch(
+                "manifest",
+                "deps-src",
+                name,
+                MismatchKind::Modified,
+                Some(format!("sha256:{}", sha256_bytes(expected))),
+                Some(format!("sha256:{}", sha256_bytes(actual))),
+            )),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                mismatches.push(file_mismatch(
+                    "manifest",
+                    "deps-src",
+                    name,
+                    MismatchKind::Missing,
+                    Some(format!("sha256:{}", sha256_bytes(expected))),
+                    None,
+                ));
+            }
+            Err(error) => mismatches.push(file_mismatch(
+                "manifest",
+                "deps-src",
+                name,
+                MismatchKind::Unreadable,
+                Some(format!("sha256:{}", sha256_bytes(expected))),
+                Some(error.to_string()),
+            )),
+        }
     }
 }
 
@@ -736,6 +798,22 @@ mod tests {
         };
         lock.environment_digest = lock.computed_environment_digest().unwrap();
         let config = Config::default();
+        let rendered = crate::manifest::render_for_verification(
+            &config,
+            &lock,
+            &directory.path().join("deps-src"),
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("deps-src/_manifest.json"),
+            rendered.json,
+        )
+        .unwrap();
+        fs::write(
+            directory.path().join("deps-src/_manifest.md"),
+            rendered.markdown,
+        )
+        .unwrap();
         assert!(super::verify_vendor(directory.path(), &config, &lock).is_clean());
 
         fs::write(package.join("R/code.R"), b"value <- 2\n").unwrap();
@@ -747,6 +825,16 @@ mod tests {
         let json = serde_json::to_string(&report).unwrap();
         assert!(json.contains("R/code.R"));
         assert!(json.contains("modified"));
+
+        fs::write(package.join("R/code.R"), b"value <- 1\n").unwrap();
+        fs::write(
+            directory.path().join("deps-src/_manifest.md"),
+            b"tampered manifest\n",
+        )
+        .unwrap();
+        let report = super::verify_vendor(directory.path(), &config, &lock);
+        assert_eq!(report.mismatches.len(), 1);
+        assert_eq!(report.mismatches[0].path, "_manifest.md");
     }
 
     #[test]

@@ -2,18 +2,17 @@
 name = "okr"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
-description = "Vendor reproducible R source context for AI coding agents"
+rust-version = "1.88"
+description = "Vendoring and reproducibility for R source context used by AI coding agents"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/nanxstats/okr"
-documentation = "https://nanx.me/okr/"
+documentation = "https://docs.rs/okr"
 keywords = ["r", "reproducibility", "vendoring", "ai", "agents"]
 categories = ["command-line-utilities", "development-tools"]
 authors = ["Nan Xiao <me@nanx.me>"]
 exclude = [
     "AGENTS.md",
-    "SPEC.md",
     "vendor/",
     "pyproject.toml",
     "uv.lock",
