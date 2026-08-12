@@ -5,7 +5,7 @@
 ### New features
 
 - The initial `okr` CLI with `init`, format-preserving `add`, idempotent
-  `sync`, diagnostic `status`, and integrity-gating `verify` commands (#1).
+  `sync`, diagnostic `status`, and integrity-gating `verify` commands (#3).
 - Strict `okr.toml` support for `[packages]` and `[references]`, including
   string and table entries, per-entry pruning options, URL SHA-256 pins, and
   hard errors for unknown keys.
