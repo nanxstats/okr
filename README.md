@@ -1,16 +1,17 @@
 # okr
 
+[![crates.io](https://img.shields.io/crates/v/okr.svg)](https://crates.io/crates/okr)
+[![CI tests](https://github.com/nanxstats/okr/actions/workflows/ci.yml/badge.svg)](https://github.com/nanxstats/okr/actions/workflows/ci.yml)
+[![Documentation](https://github.com/nanxstats/okr/actions/workflows/docs.yml/badge.svg)](https://nanx.me/okr/)
+
 > okr is not okr. It's okay-R: a context and provenance layer that makes R
 > projects legible to AI coding agents and reproducible for offline evaluation.
 
-Pronounce **okr** “okay-R.” The name is a pun: this is an R source-context and
-reproducibility tool, not an objectives-and-key-results tool.
-
-[![crates.io](https://img.shields.io/crates/v/okr.svg)](https://crates.io/crates/okr)
-[![CI](https://github.com/nanxstats/okr/actions/workflows/ci.yml/badge.svg)](https://github.com/nanxstats/okr/actions/workflows/ci.yml)
+Pronounce **okr** "okay-R." The name is a pun: this is an R source context and
+reproducibility tool, not an "objectives and key results" tool.
 
 Installed R libraries are poor context for coding agents. R code is packed into
-binary lazy-load databases (`.rdb`/`.rdx`), while compiled package `src/` trees
+binary lazy load databases (`.rdb`/`.rdx`), while compiled package `src/` trees
 are stripped at installation time. `okr` vendors exact source trees into a
 greppable synthetic monorepo and records hashes that can be checked offline.
 
@@ -20,7 +21,7 @@ greppable synthetic monorepo and records hashes that can be checked offline.
 cargo install okr
 ```
 
-## 60-second quickstart
+## Quickstart
 
 ```console
 okr init
@@ -49,7 +50,7 @@ cache.
 
 ## GitHub authentication
 
-`okr` uses `gh` when present and authenticated; otherwise it uses
+`okr` uses the `gh` CLI when present and authenticated; otherwise it uses
 `GITHUB_TOKEN`; otherwise it uses anonymous GitHub API access with low rate
 limits. Private GitHub repositories use the same tiers before falling back to
 git. GitHub Enterprise and self-hosted GitLab, Codeberg, SSH, and other
@@ -58,15 +59,8 @@ git. GitHub Enterprise and self-hosted GitLab, Codeberg, SSH, and other
 
 ## Scope
 
-`okr` installs nothing: rig, pak, renv, and rv do that; okr makes the result
-legible and provable. It never installs R, never installs packages, and never
-writes to an R library. See [Positioning](SPEC.md#2-positioning) and
-[Non-goals](SPEC.md#4-non-goals) for the boundary.
+`okr` installs nothing: rig, pak, renv, and rv do that.
 
-The project is dual-licensed under MIT or Apache-2.0.
+## License
 
-## Roadmap
-
-Milestone 0.2 adds deterministic bundles, profiles, Bioconductor/local sources,
-and optional Imports traversal. Milestone 0.3 adds system-requirements reports,
-Dockerfile emission, and pull-request refs. See [SPEC.md §16](SPEC.md#16-milestones).
+MIT
