@@ -1,0 +1,8 @@
+Package: tinytwo
+Type: Package
+Title: Second Tiny Fixture Package
+Version: 2.0.0
+Authors@R: person("Okr", "Test", email = "okr@example.test", role = c("aut", "cre"))
+Description: A forge-shaped archive fixture with a commit-style root.
+License: Apache License (>= 2)
+Encoding: UTF-8

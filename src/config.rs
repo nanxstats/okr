@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use globset::GlobBuilder;
 use serde::{Deserialize, Serialize};
 
 use crate::spec::{PackageSpec, RemoteLocation, RemoteSpec, parse_package};
@@ -47,6 +48,7 @@ impl Config {
 
     pub fn validate(&self) -> Result<()> {
         validate_vendor_path(&self.vendor.path)?;
+        validate_globs(&self.vendor.exclude, "vendor.exclude")?;
         if let Some(snapshot) = &self.project.snapshot {
             validate_snapshot(snapshot)?;
         }
@@ -55,11 +57,13 @@ impl Config {
         for (name, value) in &self.packages {
             validate_entry_name(name, EntryKind::Package)?;
             let entry = value.declare(name, EntryKind::Package)?;
+            validate_globs(&entry.exclude, &format!("[packages].{name}.exclude"))?;
             has_cran |= matches!(entry.source, DeclaredSource::Cran { .. });
         }
         for (name, value) in &self.references {
             validate_entry_name(name, EntryKind::Reference)?;
-            value.declare(name, EntryKind::Reference)?;
+            let entry = value.declare(name, EntryKind::Reference)?;
+            validate_globs(&entry.exclude, &format!("[references].{name}.exclude"))?;
         }
 
         if has_cran && self.project.snapshot.is_none() {
@@ -348,10 +352,29 @@ fn validate_snapshot(snapshot: &str) -> Result<()> {
 }
 
 fn validate_vendor_path(path: &Path) -> Result<()> {
-    if path.as_os_str().is_empty() || path == Path::new(".") || path == Path::new("..") {
+    if path.as_os_str().is_empty()
+        || path.is_absolute()
+        || path
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
         return Err(Error::Config(
-            "vendor.path must name a dedicated vendor directory".into(),
+            "vendor.path must be a normalized project-relative directory".into(),
         ));
+    }
+    Ok(())
+}
+
+fn validate_globs(patterns: &[String], location: &str) -> Result<()> {
+    for pattern in patterns {
+        GlobBuilder::new(pattern)
+            .case_insensitive(true)
+            .build()
+            .map_err(|error| {
+                Error::Config(format!(
+                    "{location} contains invalid glob `{pattern}`: {error}"
+                ))
+            })?;
     }
     Ok(())
 }
@@ -531,5 +554,20 @@ pkg = { spec = "owner/repo", exclude = ["docs/**"], include-tests = false }
         .unwrap();
         assert!(matches!(config.packages["a"], EntryValue::String(_)));
         assert!(matches!(config.packages["b"], EntryValue::Table(_)));
+    }
+
+    #[test]
+    fn vendor_paths_and_exclude_globs_are_safe() {
+        for input in [
+            "[vendor]\npath = \"../outside\"",
+            "[vendor]\npath = \"/absolute\"",
+            "[vendor]\nexclude = [\"[invalid\"]",
+            "[packages]\npkg = { spec = \"org/repo\", exclude = [\"[invalid\"] }",
+        ] {
+            assert!(
+                Config::parse(input).is_err(),
+                "`{input}` unexpectedly parsed"
+            );
+        }
     }
 }

@@ -1,0 +1,9 @@
+Package: tinyone
+Type: Package
+Title: First Tiny Fixture Package
+Version: 1.0.0
+Authors@R: person("Okr", "Test", email = "okr@example.test", role = c("aut", "cre"))
+Description: A deliberately small package used to test deterministic
+    source vendoring and pruning.
+License: MIT
+Encoding: UTF-8

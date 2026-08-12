@@ -113,6 +113,96 @@ impl HostTools {
         Ok(output.to_owned())
     }
 
+    pub fn gh_api_bytes(&self, endpoint: &str) -> Result<Vec<u8>> {
+        self.require_gh("download a private GitHub tarball")?;
+        let shell = Shell::new().map_err(shell_error)?;
+        let output = cmd!(shell, "gh api {endpoint}")
+            .quiet()
+            .output()
+            .map_err(|error| {
+                Error::Fetch(format!(
+                    "gh api failed for `{endpoint}`; check `gh auth status`: {error}"
+                ))
+            })?;
+        if output.stdout.is_empty() {
+            return Err(Error::Fetch(format!(
+                "gh api returned an empty response for `{endpoint}`"
+            )));
+        }
+        Ok(output.stdout)
+    }
+
+    pub fn git_clone_at(
+        &self,
+        url: &str,
+        reference: Option<&str>,
+        commit: &str,
+        destination: &Path,
+    ) -> Result<()> {
+        self.require_git("clone this source")?;
+        let shell = Shell::new().map_err(shell_error)?;
+        let mut branch_arguments = Vec::new();
+        if let Some(reference) = reference
+            && !crate::spec::is_full_commit_sha(reference)
+        {
+            branch_arguments.push("--branch".to_owned());
+            branch_arguments.push(reference.to_owned());
+            branch_arguments.push("--single-branch".to_owned());
+        }
+        cmd!(
+            shell,
+            "git -c core.autocrlf=false clone --quiet --depth 1 --no-checkout {branch_arguments...} {url} {destination}"
+        )
+        .run()
+        .map_err(|error| {
+            Error::Fetch(format!(
+                "git clone failed for `{url}`; check the URL and your git credentials: {error}"
+            ))
+        })?;
+        cmd!(shell, "git -C {destination} config core.autocrlf false")
+            .quiet()
+            .run()
+            .map_err(|error| Error::Fetch(format!("could not configure clone: {error}")))?;
+
+        let available = cmd!(shell, "git -C {destination} rev-parse HEAD")
+            .quiet()
+            .read()
+            .map_err(|error| Error::Fetch(format!("could not inspect cloned HEAD: {error}")))?;
+        if available.trim() != commit {
+            cmd!(
+                shell,
+                "git -c core.autocrlf=false -C {destination} fetch --quiet --depth 1 origin {commit}"
+            )
+            .run()
+            .map_err(|error| {
+                Error::Fetch(format!(
+                    "git could not fetch resolved commit {commit} from `{url}`: {error}"
+                ))
+            })?;
+        }
+        cmd!(
+            shell,
+            "git -c core.autocrlf=false -C {destination} checkout --quiet --detach {commit}"
+        )
+        .run()
+        .map_err(|error| {
+            Error::Fetch(format!(
+                "git could not check out resolved commit {commit}: {error}"
+            ))
+        })?;
+        let head = cmd!(shell, "git -C {destination} rev-parse HEAD")
+            .quiet()
+            .read()
+            .map_err(|error| Error::Fetch(format!("could not verify cloned HEAD: {error}")))?;
+        if head.trim() != commit {
+            return Err(Error::Fetch(format!(
+                "cloned HEAD mismatch for `{url}`: expected {commit}, found {}",
+                head.trim()
+            )));
+        }
+        Ok(())
+    }
+
     fn require_git(&self, purpose: &str) -> Result<()> {
         if self.git_available() {
             Ok(())
@@ -269,6 +359,22 @@ mod tests {
         );
         assert_eq!(
             tools.git_ls_remote(&url, Some("v1")).unwrap().commit,
+            expected
+        );
+
+        let clone_parent = tempdir().unwrap();
+        let clone = clone_parent.path().join("clone");
+        tools
+            .git_clone_at(&url, Some("v1"), &expected, &clone)
+            .unwrap();
+        assert_eq!(
+            cmd!(shell, "git -C {clone} config --get core.autocrlf")
+                .read()
+                .unwrap(),
+            "false"
+        );
+        assert_eq!(
+            cmd!(shell, "git -C {clone} rev-parse HEAD").read().unwrap(),
             expected
         );
     }

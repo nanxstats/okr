@@ -1,0 +1,1 @@
+stopifnot(is.function(hello))

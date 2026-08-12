@@ -309,6 +309,54 @@ impl Fetcher {
         }
         self.cache.put_reader(&key, &mut response, expected_sha256)
     }
+
+    pub fn fetch_url_with_bearer(
+        &self,
+        url: &str,
+        token: &str,
+        expected_sha256: Option<&str>,
+        label: &str,
+    ) -> Result<CachedArtifact> {
+        let key = format!("url:{url}");
+        if let Some(expected) = expected_sha256
+            && let Some(hit) = self.cache.get(expected)?
+        {
+            return Ok(hit);
+        }
+        if let Some(hit) = self.cache.lookup(&key)? {
+            if let Some(expected) = expected_sha256
+                && hit.sha256 != normalize_digest(expected)?
+            {
+                return Err(Error::Fetch(format!(
+                    "cached {label} has SHA-256 {}, expected {}",
+                    hit.sha256,
+                    normalize_digest(expected)?
+                )));
+            }
+            return Ok(hit);
+        }
+        if self.offline {
+            return Err(Error::Fetch(format!(
+                "offline mode: missing cached artifact for {label} ({url})"
+            )));
+        }
+        let mut response = self
+            .client
+            .get(url)
+            .bearer_auth(token)
+            .header("Accept", "application/vnd.github+json")
+            .send()
+            .map_err(|error| {
+                Error::Fetch(format!("could not fetch {label} from {url}: {error}"))
+            })?;
+        if !response.status().is_success() {
+            return Err(Error::Fetch(format!(
+                "could not fetch {label} from {url}: HTTP {}",
+                response.status()
+            )));
+        }
+        self.cache.put_reader(&key, &mut response, expected_sha256)
+    }
 }
 
 fn normalize_digest(digest: &str) -> Result<&str> {
