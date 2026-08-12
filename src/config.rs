@@ -62,6 +62,11 @@ impl Config {
         }
         for (name, value) in &self.references {
             validate_entry_name(name, EntryKind::Reference)?;
+            if self.packages.contains_key(name) {
+                return Err(Error::Config(format!(
+                    "entry name `{name}` appears in both [packages] and [references]"
+                )));
+            }
             let entry = value.declare(name, EntryKind::Reference)?;
             validate_globs(&entry.exclude, &format!("[references].{name}.exclude"))?;
         }
@@ -569,5 +574,18 @@ pkg = { spec = "owner/repo", exclude = ["docs/**"], include-tests = false }
                 "`{input}` unexpectedly parsed"
             );
         }
+    }
+
+    #[test]
+    fn package_and_reference_directory_names_cannot_collide() {
+        let error = Config::parse(
+            "[packages]\nshared = \"org/shared\"\n[references]\nshared = \"org/other\"",
+        )
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("both [packages] and [references]")
+        );
     }
 }
