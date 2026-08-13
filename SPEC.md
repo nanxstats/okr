@@ -212,7 +212,9 @@ Resolution is a lookup, never a solver:
 - **CRAN/snapshot:** fetch `{repo}/{snapshot}/src/contrib/PACKAGES.gz` once
   per sync (cached), parse DCF, find each declared package's version (or
   validate an explicit pin, falling back to the CRAN archive URL for
-  superseded versions). Tarball: `{...}/src/contrib/{name}_{version}.tar.gz`.
+  superseded versions). If the index repeats a package at different versions,
+  choose the greatest version using R's numeric package-version ordering.
+  Tarball: `{...}/src/contrib/{name}_{version}.tar.gz`.
 - **Git refs &rarr; commit SHA:** `git ls-remote <url> <ref>` - universal across
   hosts and protocols, uses the user's existing SSH keys and credential
   helpers, has no API rate limits. A spec pinned to a full SHA skips
