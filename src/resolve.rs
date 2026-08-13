@@ -3,6 +3,7 @@
 pub mod dcf;
 
 use std::collections::BTreeMap;
+use std::collections::btree_map::Entry;
 use std::env;
 use std::fs::File;
 use std::io::Read;
@@ -109,13 +110,17 @@ impl SnapshotIndex {
                     "PACKAGES index from {url} has no `Version` for `{name}`"
                 ))
             })?;
-            if versions
-                .insert(name.to_owned(), version.to_owned())
-                .is_some()
-            {
-                return Err(Error::Fetch(format!(
-                    "PACKAGES index from {url} contains duplicate package `{name}`"
-                )));
+            match versions.entry(name.to_owned()) {
+                Entry::Vacant(entry) => {
+                    entry.insert(version.to_owned());
+                }
+                Entry::Occupied(entry) if entry.get() == version => {}
+                Entry::Occupied(entry) => {
+                    return Err(Error::Fetch(format!(
+                        "PACKAGES index from {url} contains conflicting versions for duplicate package `{name}`: `{}` and `{version}`",
+                        entry.get()
+                    )));
+                }
             }
         }
         Ok(Self { versions })
@@ -932,6 +937,55 @@ mod tests {
             .resolve(&repository, "2026-06-30", "missing", Some("0.1.0"))
             .unwrap();
         assert!(archived_missing.archived);
+    }
+
+    #[test]
+    fn snapshot_index_accepts_same_version_recommended_package_duplicates() {
+        let root = tempdir().unwrap();
+        let contrib = root.path().join("2026-06-30/src/contrib");
+        fs::create_dir_all(&contrib).unwrap();
+        let file = fs::File::create(contrib.join("PACKAGES.gz")).unwrap();
+        let mut gzip = GzEncoder::new(file, Compression::default());
+        gzip.write_all(
+            b"Package: boot\nVersion: 1.3-32\nPath: 4.7.0/Recommended\nPriority: recommended\n\nPackage: boot\nVersion: 1.3-32\nPriority: recommended\n",
+        )
+        .unwrap();
+        gzip.finish().unwrap();
+        let repository = format!("file://{}", root.path().display());
+        let fetcher = Fetcher::new(Cache::new(root.path().join("cache")), false).unwrap();
+
+        let index = SnapshotIndex::load(&fetcher, &repository, "2026-06-30").unwrap();
+        let resolved = index
+            .resolve(&repository, "2026-06-30", "boot", None)
+            .unwrap();
+
+        assert_eq!(resolved.version, "1.3-32");
+        assert_eq!(
+            resolved.url,
+            format!("{repository}/2026-06-30/src/contrib/boot_1.3-32.tar.gz")
+        );
+    }
+
+    #[test]
+    fn snapshot_index_rejects_conflicting_duplicate_versions() {
+        let root = tempdir().unwrap();
+        let contrib = root.path().join("2026-06-30/src/contrib");
+        fs::create_dir_all(&contrib).unwrap();
+        let file = fs::File::create(contrib.join("PACKAGES.gz")).unwrap();
+        let mut gzip = GzEncoder::new(file, Compression::default());
+        gzip.write_all(b"Package: boot\nVersion: 1.3-31\n\nPackage: boot\nVersion: 1.3-32\n")
+            .unwrap();
+        gzip.finish().unwrap();
+        let repository = format!("file://{}", root.path().display());
+        let fetcher = Fetcher::new(Cache::new(root.path().join("cache")), false).unwrap();
+
+        let error = SnapshotIndex::load(&fetcher, &repository, "2026-06-30").unwrap_err();
+
+        assert!(
+            error.to_string().contains(
+                "conflicting versions for duplicate package `boot`: `1.3-31` and `1.3-32`"
+            )
+        );
     }
 
     #[test]
