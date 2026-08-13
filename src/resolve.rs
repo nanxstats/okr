@@ -2,6 +2,7 @@
 
 pub mod dcf;
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::btree_map::Entry;
 use std::env;
@@ -78,6 +79,27 @@ pub struct SnapshotIndex {
     versions: BTreeMap<String, String>,
 }
 
+fn compare_package_versions(left: &str, right: &str) -> Ordering {
+    let mut left = left.split(['.', '-']);
+    let mut right = right.split(['.', '-']);
+
+    loop {
+        match (left.next(), right.next()) {
+            (None, None) => return Ordering::Equal,
+            (left, right) => {
+                let left = left.unwrap_or("0").trim_start_matches('0');
+                let right = right.unwrap_or("0").trim_start_matches('0');
+                let left = if left.is_empty() { "0" } else { left };
+                let right = if right.is_empty() { "0" } else { right };
+                let ordering = left.len().cmp(&right.len()).then_with(|| left.cmp(right));
+                if ordering != Ordering::Equal {
+                    return ordering;
+                }
+            }
+        }
+    }
+}
+
 impl SnapshotIndex {
     pub fn load(fetcher: &Fetcher, repository: &str, snapshot: &str) -> Result<Self> {
         let url = format!(
@@ -114,12 +136,10 @@ impl SnapshotIndex {
                 Entry::Vacant(entry) => {
                     entry.insert(version.to_owned());
                 }
-                Entry::Occupied(entry) if entry.get() == version => {}
-                Entry::Occupied(entry) => {
-                    return Err(Error::Fetch(format!(
-                        "PACKAGES index from {url} contains conflicting versions for duplicate package `{name}`: `{}` and `{version}`",
-                        entry.get()
-                    )));
+                Entry::Occupied(mut entry) => {
+                    if compare_package_versions(version, entry.get()) == Ordering::Greater {
+                        entry.insert(version.to_owned());
+                    }
                 }
             }
         }
@@ -875,8 +895,8 @@ mod tests {
 
     use super::{
         GithubApiMethod, GithubRelease, GithubReleaseApi, GithubRepository, ResolvedSource,
-        SnapshotIndex, archive_for, encode_path_segment, resolve, resolve_public_forge_ref,
-        split_git_host_path,
+        SnapshotIndex, archive_for, compare_package_versions, encode_path_segment, resolve,
+        resolve_public_forge_ref, split_git_host_path,
     };
     use crate::config::Config;
     use crate::fetch::{Cache, Fetcher};
@@ -967,25 +987,40 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_index_rejects_conflicting_duplicate_versions() {
+    fn snapshot_index_chooses_greatest_conflicting_duplicate_version() {
         let root = tempdir().unwrap();
         let contrib = root.path().join("2026-06-30/src/contrib");
         fs::create_dir_all(&contrib).unwrap();
         let file = fs::File::create(contrib.join("PACKAGES.gz")).unwrap();
         let mut gzip = GzEncoder::new(file, Compression::default());
-        gzip.write_all(b"Package: boot\nVersion: 1.3-31\n\nPackage: boot\nVersion: 1.3-32\n")
-            .unwrap();
+        gzip.write_all(
+            b"Package: cluster\nVersion: 2.1.8.2\nPath: 4.7.0/Recommended\nPriority: recommended\n\nPackage: cluster\nVersion: 2.1.8.3\nPriority: recommended\n",
+        )
+        .unwrap();
         gzip.finish().unwrap();
         let repository = format!("file://{}", root.path().display());
         let fetcher = Fetcher::new(Cache::new(root.path().join("cache")), false).unwrap();
 
-        let error = SnapshotIndex::load(&fetcher, &repository, "2026-06-30").unwrap_err();
+        let index = SnapshotIndex::load(&fetcher, &repository, "2026-06-30").unwrap();
+        let resolved = index
+            .resolve(&repository, "2026-06-30", "cluster", None)
+            .unwrap();
 
-        assert!(
-            error.to_string().contains(
-                "conflicting versions for duplicate package `boot`: `1.3-31` and `1.3-32`"
-            )
+        assert_eq!(resolved.version, "2.1.8.3");
+        assert_eq!(
+            resolved.url,
+            format!("{repository}/2026-06-30/src/contrib/cluster_2.1.8.3.tar.gz")
         );
+    }
+
+    #[test]
+    fn package_version_comparison_is_numeric_and_order_independent() {
+        use std::cmp::Ordering;
+
+        assert_eq!(compare_package_versions("1.10", "1.9"), Ordering::Greater);
+        assert_eq!(compare_package_versions("1.9", "1.10"), Ordering::Less);
+        assert_eq!(compare_package_versions("1.0", "1.0.0"), Ordering::Equal);
+        assert_eq!(compare_package_versions("1-02", "1.2"), Ordering::Equal);
     }
 
     #[test]
