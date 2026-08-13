@@ -26,6 +26,12 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
     let first_lock = fs::read(project.path().join("okr.lock")).unwrap();
     let first_json = fs::read(project.path().join("deps-src/_manifest.json")).unwrap();
     let first_markdown = fs::read(project.path().join("deps-src/_manifest.md")).unwrap();
+    let lock_text = String::from_utf8(first_lock.clone()).unwrap();
+    let manifest: serde_json::Value = serde_json::from_slice(&first_json).unwrap();
+    assert!(lock_text.starts_with("version = 1\n"));
+    assert!(!lock_text.contains(".files]"));
+    assert_eq!(manifest["schema"], 1);
+    assert!(manifest["entries"][0].get("files").is_none());
 
     okr(project.path(), &cache, &empty_path)
         .arg("sync")
@@ -67,7 +73,8 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
         .args(["verify", "--json"])
         .assert()
         .code(4)
-        .stdout(predicate::str::contains("R/hello.R"))
+        .stdout(predicate::str::contains("\"schema\": 1"))
+        .stdout(predicate::str::contains("\"path\": \".\""))
         .stdout(predicate::str::contains("\"mismatch\": \"modified\""));
 }
 

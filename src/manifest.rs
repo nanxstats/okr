@@ -43,7 +43,6 @@ struct JsonEntry {
     title: Option<String>,
     tree_digest: String,
     tarball_sha256: Option<String>,
-    files: std::collections::BTreeMap<String, String>,
 }
 
 pub fn render(config: &Config, lock: &Lockfile, vendored: &VendorResult) -> Result<ManifestOutput> {
@@ -66,7 +65,6 @@ pub fn render(config: &Config, lock: &Lockfile, vendored: &VendorResult) -> Resu
             title,
             tree_digest: package.tree_digest.clone(),
             tarball_sha256: package.tarball_sha256.clone(),
-            files: package.files.clone(),
         });
     }
     for reference in &lock.references {
@@ -86,7 +84,6 @@ pub fn render(config: &Config, lock: &Lockfile, vendored: &VendorResult) -> Resu
             title,
             tree_digest: reference.tree_digest.clone(),
             tarball_sha256: reference.tarball_sha256.clone(),
-            files: reference.files.clone(),
         });
     }
     entries.sort_by(|left, right| (left.kind, &left.name).cmp(&(right.kind, &right.name)));
@@ -143,7 +140,7 @@ pub(crate) fn render_for_verification(
             artifact_sha256: package.tarball_sha256.clone().unwrap_or_default(),
             tree: TreeDigest {
                 digest: package.tree_digest.clone(),
-                files: package.files.clone(),
+                files: Default::default(),
             },
         });
     }
@@ -159,7 +156,7 @@ pub(crate) fn render_for_verification(
             artifact_sha256: reference.tarball_sha256.clone().unwrap_or_default(),
             tree: TreeDigest {
                 digest: reference.tree_digest.clone(),
-                files: reference.files.clone(),
+                files: Default::default(),
             },
         });
     }
@@ -405,7 +402,6 @@ mod tests {
                 fetch_method: FetchMethod::Tarball,
                 tarball_sha256: Some("c".repeat(64)),
                 tree_digest: format!("sha256:{}", "d".repeat(64)),
-                files: BTreeMap::from([("DESCRIPTION".into(), "e".repeat(64))]),
                 license: Some("MIT".into()),
             }],
             references: vec![LockedReference {
@@ -417,7 +413,6 @@ mod tests {
                 fetch_method: FetchMethod::GitClone,
                 tarball_sha256: Some("1".repeat(64)),
                 tree_digest: format!("sha256:{}", "2".repeat(64)),
-                files: BTreeMap::from([("README.md".into(), "3".repeat(64))]),
                 license: Some("Apache-2.0".into()),
             }],
         };
