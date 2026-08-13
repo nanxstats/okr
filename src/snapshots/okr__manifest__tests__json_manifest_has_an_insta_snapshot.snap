@@ -16,10 +16,7 @@ expression: "render(&config, &lock, &vendored).unwrap().json"
       "path": "deps-src/tinyone",
       "title": "First Tiny Fixture Package",
       "tree-digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-      "tarball-sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
-      "files": {
-        "DESCRIPTION": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-      }
+      "tarball-sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     },
     {
       "kind": "reference",
@@ -31,10 +28,7 @@ expression: "render(&config, &lock, &vendored).unwrap().json"
       "path": "deps-src/standards",
       "title": null,
       "tree-digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-      "tarball-sha256": "1111111111111111111111111111111111111111111111111111111111111111",
-      "files": {
-        "README.md": "3333333333333333333333333333333333333333333333333333333333333333"
-      }
+      "tarball-sha256": "1111111111111111111111111111111111111111111111111111111111111111"
     }
   ]
 }
