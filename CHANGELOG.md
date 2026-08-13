@@ -1,5 +1,11 @@
 # Changelog
 
+## okr 0.2.0
+
+### Dependencies
+
+- Use full version requirements for Cargo dependencies (#10).
+
 ## okr 0.1.0
 
 ### New features
