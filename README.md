@@ -45,7 +45,9 @@ okr verify --strict --json
 `verify` always treats vendor-tree drift as an exit-4 failure. `--strict` also
 requires the read-only installed-library coherence check when R is available.
 Use `okr sync --offline` to rebuild entirely from the local content-addressed
-cache.
+cache. The compact lock records an acquisition-artifact hash and one aggregate
+digest for each post-pruning source tree; verification recomputes the latter
+from every vendored file.
 
 ## GitHub authentication
 

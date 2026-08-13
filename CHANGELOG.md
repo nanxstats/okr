@@ -1,5 +1,12 @@
 # Changelog
 
+## okr (development version)
+
+### Improvements
+
+- Replace serialized per-file hash inventories in lockfiles and JSON manifests
+  with aggregate tree digests, to keep generated metadata compact (#19).
+
 ## okr 0.1.1
 
 ### Bug fixes

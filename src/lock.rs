@@ -1,6 +1,5 @@
 //! Stable lockfile models, construction, and atomic serialization.
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -47,8 +46,6 @@ pub struct LockedPackage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tarball_sha256: Option<String>,
     pub tree_digest: String,
-    #[serde(default)]
-    pub files: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
 }
@@ -69,8 +66,6 @@ pub struct LockedReference {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tarball_sha256: Option<String>,
     pub tree_digest: String,
-    #[serde(default)]
-    pub files: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
 }
@@ -235,7 +230,6 @@ fn lock_package(resolved: &ResolvedEntry, tree: &VendoredEntry) -> Result<Locked
         fetch_method: tree.fetch_method,
         tarball_sha256: Some(tree.artifact_sha256.clone()),
         tree_digest: tree.tree.digest.clone(),
-        files: tree.tree.files.clone(),
         license: tree.license.clone(),
     })
 }
@@ -251,7 +245,6 @@ fn lock_reference(resolved: &ResolvedEntry, tree: &VendoredEntry) -> LockedRefer
         fetch_method: tree.fetch_method,
         tarball_sha256: Some(tree.artifact_sha256.clone()),
         tree_digest: tree.tree.digest.clone(),
-        files: tree.tree.files.clone(),
         license: tree.license.clone(),
     }
 }
@@ -325,7 +318,7 @@ pub enum MismatchKind {
     LockOrder,
 }
 
-/// Verify every locked file and aggregate tree digest under the vendor root.
+/// Recompute and verify each aggregate tree digest under the vendor root.
 pub fn verify_vendor(
     project_directory: &Path,
     config: &Config,
@@ -373,7 +366,6 @@ pub fn verify_vendor(
             "package",
             &package.name,
             &package.tree_digest,
-            &package.files,
             &mut mismatches,
         );
     }
@@ -384,7 +376,6 @@ pub fn verify_vendor(
             "reference",
             &reference.name,
             &reference.tree_digest,
-            &reference.files,
             &mut mismatches,
         );
     }
@@ -418,32 +409,18 @@ fn verify_entry(
     entry_kind: &str,
     name: &str,
     expected_tree_digest: &str,
-    expected_files: &BTreeMap<String, String>,
     mismatches: &mut Vec<FileMismatch>,
 ) {
     let directory = root.join(name);
     if !root_exists || !directory.is_dir() {
-        if expected_files.is_empty() {
-            mismatches.push(file_mismatch(
-                entry_kind,
-                name,
-                ".",
-                MismatchKind::Missing,
-                Some(expected_tree_digest.to_owned()),
-                None,
-            ));
-        } else {
-            for (path, digest) in expected_files {
-                mismatches.push(file_mismatch(
-                    entry_kind,
-                    name,
-                    path,
-                    MismatchKind::Missing,
-                    Some(digest.clone()),
-                    None,
-                ));
-            }
-        }
+        mismatches.push(file_mismatch(
+            entry_kind,
+            name,
+            ".",
+            MismatchKind::Missing,
+            Some(expected_tree_digest.to_owned()),
+            None,
+        ));
         return;
     }
 
@@ -461,43 +438,7 @@ fn verify_entry(
             return;
         }
     };
-    let before = mismatches.len();
-    if !expected_files.is_empty() {
-        for (path, expected) in expected_files {
-            match actual.files.get(path) {
-                None => mismatches.push(file_mismatch(
-                    entry_kind,
-                    name,
-                    path,
-                    MismatchKind::Missing,
-                    Some(expected.clone()),
-                    None,
-                )),
-                Some(found) if found != expected => mismatches.push(file_mismatch(
-                    entry_kind,
-                    name,
-                    path,
-                    MismatchKind::Modified,
-                    Some(expected.clone()),
-                    Some(found.clone()),
-                )),
-                Some(_) => {}
-            }
-        }
-        for (path, actual) in &actual.files {
-            if !expected_files.contains_key(path) {
-                mismatches.push(file_mismatch(
-                    entry_kind,
-                    name,
-                    path,
-                    MismatchKind::Unexpected,
-                    None,
-                    Some(actual.clone()),
-                ));
-            }
-        }
-    }
-    if actual.digest != expected_tree_digest && mismatches.len() == before {
+    if actual.digest != expected_tree_digest {
         mismatches.push(file_mismatch(
             entry_kind,
             name,
@@ -665,7 +606,6 @@ const fn mismatch_name(kind: MismatchKind) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::fs;
 
     use tempfile::tempdir;
@@ -677,7 +617,7 @@ mod tests {
         Lockfile {
             version: 1,
             okr_version: "0.1.0".into(),
-            generated: "2026-08-11T17:03:00Z".into(),
+            generated: "2026-06-30T00:00:00Z".into(),
             snapshot: Some("2026-06-30".into()),
             config_hash: format!("sha256:{}", "a".repeat(64)),
             environment_digest: format!("sha256:{}", "b".repeat(64)),
@@ -691,7 +631,6 @@ mod tests {
                 fetch_method: FetchMethod::Tarball,
                 tarball_sha256: Some("c".repeat(64)),
                 tree_digest: format!("sha256:{}", "d".repeat(64)),
-                files: BTreeMap::from([("DESCRIPTION".into(), "1".repeat(64))]),
                 license: Some("LGPL-2.1".into()),
             }],
             references: vec![LockedReference {
@@ -703,14 +642,13 @@ mod tests {
                 fetch_method: FetchMethod::GitClone,
                 tarball_sha256: Some("f".repeat(64)),
                 tree_digest: format!("sha256:{}", "0".repeat(64)),
-                files: BTreeMap::from([("README.md".into(), "2".repeat(64))]),
                 license: None,
             }],
         }
     }
 
     #[test]
-    fn lock_model_round_trips_all_fields() {
+    fn lock_model_round_trips_the_current_schema() {
         let lock = example_lock();
         let encoded = toml::to_string(&lock).unwrap();
         let decoded: Lockfile = toml::from_str(&encoded).unwrap();
@@ -763,7 +701,7 @@ mod tests {
     }
 
     #[test]
-    fn verify_reports_the_exact_modified_file_as_json() {
+    fn verify_reports_an_aggregate_tree_mismatch_as_json() {
         let directory = tempdir().unwrap();
         let package = directory.path().join("deps-src/pkg");
         fs::create_dir_all(package.join("R")).unwrap();
@@ -791,7 +729,6 @@ mod tests {
                 fetch_method: FetchMethod::ForgeTarball,
                 tarball_sha256: Some("3".repeat(64)),
                 tree_digest: tree.digest,
-                files: tree.files,
                 license: Some("MIT".into()),
             }],
             references: Vec::new(),
@@ -820,10 +757,11 @@ mod tests {
         let report = super::verify_vendor(directory.path(), &config, &lock);
         assert!(!report.is_clean());
         assert_eq!(report.mismatches.len(), 1);
-        assert_eq!(report.mismatches[0].path, "R/code.R");
+        assert_eq!(report.mismatches[0].path, ".");
         assert_eq!(report.mismatches[0].mismatch, super::MismatchKind::Modified);
         let json = serde_json::to_string(&report).unwrap();
-        assert!(json.contains("R/code.R"));
+        assert!(json.contains(&report.mismatches[0].expected.clone().unwrap()));
+        assert!(json.contains(&report.mismatches[0].actual.clone().unwrap()));
         assert!(json.contains("modified"));
 
         fs::write(package.join("R/code.R"), b"value <- 1\n").unwrap();
@@ -838,7 +776,7 @@ mod tests {
     }
 
     #[test]
-    fn verify_detects_missing_unexpected_and_unlocked_roots() {
+    fn verify_detects_tree_drift_and_unlocked_roots() {
         let directory = tempdir().unwrap();
         let package = directory.path().join("deps-src/pkg");
         fs::create_dir_all(&package).unwrap();
@@ -848,7 +786,6 @@ mod tests {
         lock.packages.truncate(1);
         lock.packages[0].name = "pkg".into();
         lock.packages[0].tree_digest = tree.digest;
-        lock.packages[0].files = tree.files;
         lock.references.clear();
         lock.environment_digest = lock.computed_environment_digest().unwrap();
         fs::remove_file(package.join("expected")).unwrap();
@@ -856,10 +793,9 @@ mod tests {
         fs::create_dir_all(directory.path().join("deps-src/unlocked")).unwrap();
         let report = super::verify_vendor(directory.path(), &Config::default(), &lock);
         assert!(report.mismatches.iter().any(|item| {
-            item.path == "expected" && item.mismatch == super::MismatchKind::Missing
-        }));
-        assert!(report.mismatches.iter().any(|item| {
-            item.path == "unexpected" && item.mismatch == super::MismatchKind::Unexpected
+            item.entry == "pkg"
+                && item.path == "."
+                && item.mismatch == super::MismatchKind::Modified
         }));
         assert!(
             report

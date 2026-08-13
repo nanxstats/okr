@@ -4,10 +4,10 @@ expression: encoded
 ---
 version = 1
 okr-version = "0.1.0"
-generated = "2026-08-11T17:03:00Z"
+generated = "2026-06-30T00:00:00Z"
 snapshot = "2026-06-30"
 config-hash = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-environment-digest = "sha256:8b6010482f61aa43082eefe39ed58e9ccba842655099c66e25834aeef539dc53"
+environment-digest = "sha256:fb88e7f694d5fee60740b31840d1f997d4c35d919e28d6ff623df311b857ed6e"
 
 [[package]]
 name = "rpact"
@@ -19,9 +19,6 @@ tarball-sha256 = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc
 tree-digest = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
 license = "LGPL-2.1"
 
-[package.files]
-DESCRIPTION = "1111111111111111111111111111111111111111111111111111111111111111"
-
 [[reference]]
 name = "standards"
 source = "git::git@example.test:stds/standards.git"
@@ -30,6 +27,3 @@ commit = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 fetch-method = "git-clone"
 tarball-sha256 = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
 tree-digest = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
-
-[reference.files]
-"README.md" = "2222222222222222222222222222222222222222222222222222222222222222"

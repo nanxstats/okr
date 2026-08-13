@@ -287,7 +287,6 @@ mod tests {
                 fetch_method: FetchMethod::Tarball,
                 tarball_sha256: None,
                 tree_digest: "sha256:tree".into(),
-                files: BTreeMap::new(),
                 license: Some("MIT".into()),
             }],
             references: Vec::new(),

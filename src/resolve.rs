@@ -885,7 +885,6 @@ fn validate_api_commit(commit: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
     use std::fs;
     use std::io::Write;
 
@@ -1075,7 +1074,6 @@ mod tests {
                 fetch_method: FetchMethod::GitClone,
                 tarball_sha256: Some("d".repeat(64)),
                 tree_digest: format!("sha256:{}", "e".repeat(64)),
-                files: BTreeMap::new(),
                 license: None,
             }],
         };

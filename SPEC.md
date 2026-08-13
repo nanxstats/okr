@@ -47,8 +47,9 @@ snapshot, but executing it is the user's (or their package manager's) job.
 3. Guarantee **version--source coherence** between the vendored tree and the
    declared/locked versions; *diagnose* (not enforce, by default) coherence
    with the user's installed library.
-4. Produce a lockfile with content hashes sufficient for byte-level
-   verification and an environment digest for stamping benchmark runs.
+4. Produce a compact lockfile with aggregate content hashes sufficient for
+   byte-level verification and an environment digest for stamping benchmark
+   runs.
 5. Generate agent-facing manifests so coding agents discover the vendored
    tree without prompting.
 6. Support fully offline operation from a local cache or bundle.
@@ -146,9 +147,10 @@ install with:  Rscript -e 'pak::pkg_install(c("rpact","gsDesign"), repos="https:
 
 **`verify`** - Re-hash the full vendor tree against `okr.lock`. Tree
 integrity is **always** a hard check: exit 0 clean, exit 4 on any drift;
-`--json` lists per-file mismatches. `--strict` additionally runs the library
-coherence check as hard (for eval sandboxes where the installed library is
-part of the attested environment). This is the eval harness's integrity gate.
+`--json` lists entry-level tree mismatches with expected and actual aggregate
+digests. `--strict` additionally runs the library coherence check as hard (for
+eval sandboxes where the installed library is part of the attested
+environment). This is the eval harness's integrity gate.
 
 **`bundle`** (0.2) - Deterministic `tar.zst` containing `okr.toml`,
 `okr.lock`, `deps-src/`, and (with `--include-cache`) the artifacts needed to
@@ -302,7 +304,7 @@ TOML, generated, stable ordering (entries sorted by name within kind):
 ```toml
 version = 1                          # lockfile schema
 okr-version = "0.1.0"
-generated = "2026-08-11T17:03:00Z"
+generated = "2026-06-30T00:00:00Z"
 snapshot = "2026-06-30"              # present iff CRAN entries exist
 config-hash = "sha256:..."             # normalized okr.toml hash, staleness detection
 environment-digest = "sha256:..."      # hash over all entries below; the benchmark stamp
@@ -340,14 +342,24 @@ tree-digest = "sha256:..."
 `environment-digest` is deterministic given identical lock content and is
 the value an eval harness records per run and asserts via `okr verify`.
 
+`tarball-sha256` attests the cached acquisition artifact. It cannot replace
+`tree-digest`: extraction and pruning produce a different byte set, and a
+clone source is cached as a normalized tarball only after pruning. The tree
+digest attests the source bytes agents actually read. `okr` computes it from
+the sorted per-file inventory described in §9, but does not serialize that
+inventory. Repeating every file hash would add no integrity beyond the
+collision-resistant aggregate and would make lock and manifest size grow with
+the number and path length of source files. Consequently, verification reports
+the entry whose tree changed rather than diagnosing an individual file.
+
 ## 12. Agent affordances
 
 - `deps-src/_manifest.md` - compact tables, packages and references listed
   separately: name, version (or commit), source, license, path, one-line
   description (`Title` from DESCRIPTION where available). Header text tells
   an agent what this tree is and that it is read-only reference material.
-- `deps-src/_manifest.json` - the same, machine-readable, plus digests and
-  `kind` per entry; schema versioned (`"schema": 1`). This is the
+- `deps-src/_manifest.json` - the same, machine-readable, plus aggregate
+  digests and `kind` per entry; schema versioned (`"schema": 1`). This is the
   integration surface for eval harnesses.
 - `AGENTS.md` marker block (when `manifest.agents-file = true`):
 
