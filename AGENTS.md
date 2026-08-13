@@ -63,7 +63,7 @@ library modules.
 | `src/hosttools.rs` | Optional `git`/`gh` discovery and all host-tool subprocess calls. | Use only `xshell` argument vectors; inherit user auth; produce actionable missing-tool errors; clone with `core.autocrlf=false`. |
 | `src/vendor.rs` | Tar extraction, clone fallback, kind-specific pruning, metadata inspection, normalized clone caching, and atomic tree replacement. | Reject unsafe tar entries and non-files; packages and references have different pruning defaults; record the actual fetch method. |
 | `src/digest.rs` | SHA-256 helpers and deterministic source-tree inventories. | Sort paths, normalize separators to `/`, hash file bytes exactly, and reject symlinks/non-files. |
-| `src/lock.rs` | Stable lock construction/serialization plus full vendor and manifest verification. | Sort entries, retain per-file hashes, recompute the environment digest, and keep clean rebuilds byte-identical. |
+| `src/lock.rs` | Stable lock construction/serialization plus full vendor and manifest verification. | Sort entries, retain aggregate tree digests, recompute the environment digest, and keep clean rebuilds byte-identical. |
 | `src/manifest.rs` | `_manifest.json`, `_manifest.md`, `AGENTS.md` marker blocks, and managed `.gitignore` entries. | JSON is schema-versioned; package/reference sections remain distinct; only text inside okr marker blocks may be replaced. |
 | `src/rlib.rs` | Read-only `Rscript` discovery, installed package enumeration, and coherence comparison. | Absence of R is a successful skip with a note. Never execute the companion install command. |
 
@@ -77,8 +77,9 @@ Deterministic output is a correctness requirement, not a cosmetic preference.
   trailing newline. Paths are UTF-8 and `/`-normalized.
 - The lock's `generated` value is snapshot midnight, or the Unix epoch for a
   remote-only lock; do not replace it with wall-clock time.
-- The lock's `files` maps enable per-file verification and are part of the
-  environment digest.
+- Per-file hashes are an internal input to each aggregate tree digest; do not
+  serialize the inventory in the lock or manifest. The aggregate tree digests
+  are part of the environment digest.
 - Clone-produced trees are cached as normalized gzip tarballs with sorted
   paths, zero mtimes and ownership, and normalized modes.
 - `fetch-method` is provenance. Reproduction should replay the locked method
