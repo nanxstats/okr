@@ -416,6 +416,10 @@ fn extract_tarball(archive_path: &Path, destination: &Path) -> Result<()> {
     let mut files = BTreeSet::new();
     for entry in archive.entries()? {
         let mut entry = entry?;
+        let entry_type = entry.header().entry_type();
+        if entry_type.is_pax_global_extensions() {
+            continue;
+        }
         let path = entry.path()?.into_owned();
         let mut components = path.components();
         let first = components.next().ok_or_else(|| {
@@ -455,9 +459,9 @@ fn extract_tarball(archive_path: &Path, destination: &Path) -> Result<()> {
             continue;
         }
         let output = destination.join(&relative);
-        if entry.header().entry_type().is_dir() {
+        if entry_type.is_dir() {
             fs::create_dir_all(output)?;
-        } else if entry.header().entry_type().is_file() {
+        } else if entry_type.is_file() {
             if !files.insert(relative.clone()) {
                 return Err(Error::Io(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -728,10 +732,14 @@ mod tests {
     use std::fs;
     use std::path::Path;
 
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
     use tempfile::tempdir;
     use xshell::{Shell, cmd};
 
-    use super::{detect_reference_license, github_api_tarball_url, reference_title, vendor};
+    use super::{
+        detect_reference_license, extract_tarball, github_api_tarball_url, reference_title, vendor,
+    };
     use crate::config::Config;
     use crate::fetch::{Cache, Fetcher};
     use crate::hosttools::HostTools;
@@ -827,6 +835,49 @@ mod tests {
         assert_eq!(result.entries[0].version.as_deref(), Some("1.0.0"));
         assert_eq!(result.entries[0].license.as_deref(), Some("MIT"));
         assert_eq!(result.entries[0].fetch_method, FetchMethod::Tarball);
+    }
+
+    #[test]
+    fn extraction_ignores_pax_global_metadata_before_the_source_root() {
+        let directory = tempdir().unwrap();
+        let archive_path = directory.path().join("github-archive.tar.gz");
+        let file = fs::File::create(&archive_path).unwrap();
+        let gzip = GzEncoder::new(file, Compression::default());
+        let mut archive = tar::Builder::new(gzip);
+
+        let pax = b"52 comment=37b74f85e62680b9d4523b0b4c0d9bfa0403d299\n";
+        let mut pax_header = tar::Header::new_ustar();
+        pax_header.set_entry_type(tar::EntryType::XGlobalHeader);
+        pax_header.set_size(pax.len() as u64);
+        pax_header.set_cksum();
+        archive
+            .append_data(&mut pax_header, "pax_global_header", &pax[..])
+            .unwrap();
+
+        let description = b"Package: ggsci\nVersion: 4.0.0\n";
+        let mut file_header = tar::Header::new_ustar();
+        file_header.set_entry_type(tar::EntryType::file());
+        file_header.set_mode(0o644);
+        file_header.set_size(description.len() as u64);
+        file_header.set_cksum();
+        archive
+            .append_data(
+                &mut file_header,
+                "ggsci-37b74f85e62680b9d4523b0b4c0d9bfa0403d299/DESCRIPTION",
+                &description[..],
+            )
+            .unwrap();
+        archive.into_inner().unwrap().finish().unwrap();
+
+        let extracted = directory.path().join("extracted");
+        fs::create_dir(&extracted).unwrap();
+        extract_tarball(&archive_path, &extracted).unwrap();
+
+        assert_eq!(
+            fs::read(extracted.join("DESCRIPTION")).unwrap(),
+            description
+        );
+        assert!(!extracted.join("pax_global_header").exists());
     }
 
     #[test]
