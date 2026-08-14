@@ -2,10 +2,17 @@
 
 ## okr (development version)
 
+### Bug fixes
+
+- Inspect installed packages with normal R startup semantics so customized
+  system, user, and project library paths are honored (#20).
+
 ### Improvements
 
 - Replace serialized per-file hash inventories in lockfiles and JSON manifests
   with aggregate tree digests, to keep generated metadata compact (#19).
+- Keep environment digests out of routine `okr sync` output unless `--verbose`
+  is requested (#20).
 
 ## okr 0.1.1
 

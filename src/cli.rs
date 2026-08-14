@@ -309,7 +309,7 @@ fn run_status(config_path: &Path, json: bool, quiet: bool, _verbose: bool) -> Re
     let tools = HostTools::new().availability();
     let cache = Cache::from_environment()?;
     let cache_stats = cache.stats()?;
-    let inspection = crate::rlib::inspect();
+    let inspection = crate::rlib::inspect_in(&project);
     let current_config_hash = config_hash(&config)?;
     let lock_fresh = lock
         .as_ref()
@@ -552,7 +552,7 @@ fn run_sync(
     {
         update_agents_file(&project_directory, &config)?;
         update_gitignore(&project_directory, &config)?;
-        let coherence = check_coherence(lock, &crate::rlib::inspect());
+        let coherence = check_coherence(lock, &crate::rlib::inspect_in(&project_directory));
         emit_coherence(&config, lock, &coherence, quiet);
         if (args.strict || config.project.strict) && coherence.has_mismatches() {
             return Err(Error::Verification(format!(
@@ -561,10 +561,10 @@ fn run_sync(
             )));
         }
         if !quiet {
-            println!(
-                "already synchronized; no changes ({})",
-                lock.environment_digest
-            );
+            println!("already synchronized; no changes");
+            if verbose {
+                println!("environment digest: {}", lock.environment_digest);
+            }
         }
         return Ok(());
     }
@@ -586,16 +586,16 @@ fn run_sync(
             eprintln!("warning: {warning}");
         }
         println!(
-            "synchronized {} source entr{} ({})",
+            "synchronized {} source entr{}",
             vendored.entries.len(),
             if vendored.entries.len() == 1 {
                 "y"
             } else {
                 "ies"
-            },
-            lock.environment_digest
+            }
         );
         if verbose {
+            println!("environment digest: {}", lock.environment_digest);
             let stats = fetcher.cache().stats()?;
             println!(
                 "cache: {} artifact(s), {} byte(s) at {}",
@@ -606,7 +606,7 @@ fn run_sync(
         }
     }
 
-    let coherence = check_coherence(&lock, &crate::rlib::inspect());
+    let coherence = check_coherence(&lock, &crate::rlib::inspect_in(&project_directory));
     emit_coherence(
         &config,
         &lock,
@@ -634,7 +634,8 @@ fn run_verify(
     let lock = Lockfile::load(&project_directory.join("okr.lock"))?;
     let tree = verify_vendor(&project_directory, &config, &lock);
     let strict = args.strict || config.project.strict;
-    let coherence = strict.then(|| check_coherence(&lock, &crate::rlib::inspect()));
+    let coherence =
+        strict.then(|| check_coherence(&lock, &crate::rlib::inspect_in(&project_directory)));
     let coherence_failed = coherence
         .as_ref()
         .is_some_and(CoherenceReport::has_mismatches);
