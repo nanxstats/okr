@@ -23,7 +23,9 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
         .success()
         .stdout(predicate::str::contains("synchronized 1 source entry"))
         .stdout(predicate::str::contains("sha256:").not())
-        .stdout(predicate::str::contains("Rscript was not found"));
+        .stdout(predicate::str::contains("Rscript was not found"))
+        .stderr(predicate::str::contains("Resolving sources").not())
+        .stderr(predicate::str::contains("Preparing tinyone").not());
     let first_lock = fs::read(project.path().join("okr.lock")).unwrap();
     let first_json = fs::read(project.path().join("deps-src/_manifest.json")).unwrap();
     let first_markdown = fs::read(project.path().join("deps-src/_manifest.md")).unwrap();
@@ -50,9 +52,11 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
     fs::remove_dir_all(project.path().join("deps-src")).unwrap();
     fs::remove_file(project.path().join("okr.lock")).unwrap();
     okr(project.path(), &cache, &empty_path)
-        .args(["sync", "--offline"])
+        .args(["--quiet", "sync", "--offline"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::is_empty())
+        .stderr(predicate::str::is_empty());
     assert_eq!(
         fs::read(project.path().join("okr.lock")).unwrap(),
         first_lock

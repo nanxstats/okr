@@ -6,12 +6,13 @@ use std::io::{self, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
 use flate2::{Compression, GzBuilder};
-use reqwest::blocking::Client;
+use reqwest::blocking::{Client, Response};
 use serde::de::DeserializeOwned;
 use tar::{Builder as TarBuilder, Header};
 use tempfile::NamedTempFile;
 
 use crate::digest::{sha256_bytes, sha256_file, tree_digest};
+use crate::progress::SyncProgress;
 use crate::{Error, Result};
 
 const ARTIFACTS_DIRECTORY: &str = "artifacts";
@@ -239,6 +240,7 @@ pub struct Fetcher {
     cache: Cache,
     client: Client,
     offline: bool,
+    progress: Option<SyncProgress>,
 }
 
 impl Fetcher {
@@ -251,7 +253,14 @@ impl Fetcher {
             cache,
             client,
             offline,
+            progress: None,
         })
+    }
+
+    #[must_use]
+    pub(crate) fn with_progress(mut self, progress: SyncProgress) -> Self {
+        self.progress = Some(progress);
+        self
     }
 
     #[must_use]
@@ -299,7 +308,7 @@ impl Fetcher {
             return self.cache.put_file(&key, &path, expected_sha256);
         }
 
-        let mut response = self.client.get(url).send().map_err(|error| {
+        let response = self.client.get(url).send().map_err(|error| {
             Error::Fetch(format!("could not fetch {label} from {url}: {error}"))
         })?;
         if !response.status().is_success() {
@@ -308,7 +317,7 @@ impl Fetcher {
                 response.status()
             )));
         }
-        self.cache.put_reader(&key, &mut response, expected_sha256)
+        self.cache_response(&key, response, expected_sha256, label)
     }
 
     pub fn fetch_url_with_bearer(
@@ -341,7 +350,7 @@ impl Fetcher {
                 "offline mode: missing cached artifact for {label} ({url})"
             )));
         }
-        let mut response = self
+        let response = self
             .client
             .get(url)
             .bearer_auth(token)
@@ -356,7 +365,7 @@ impl Fetcher {
                 response.status()
             )));
         }
-        self.cache.put_reader(&key, &mut response, expected_sha256)
+        self.cache_response(&key, response, expected_sha256, label)
     }
 
     pub fn get_json<T: DeserializeOwned>(&self, url: &str, label: &str) -> Result<T> {
@@ -380,6 +389,29 @@ impl Fetcher {
         response
             .json()
             .map_err(|error| Error::Fetch(format!("invalid {label} response from {url}: {error}")))
+    }
+
+    fn cache_response(
+        &self,
+        key: &str,
+        response: Response,
+        expected_sha256: Option<&str>,
+        label: &str,
+    ) -> Result<CachedArtifact> {
+        let transfer = self
+            .progress
+            .as_ref()
+            .map(|progress| progress.download(label, response.content_length()));
+        let result = if let Some(transfer) = &transfer {
+            self.cache
+                .put_reader(key, transfer.wrap_read(response), expected_sha256)
+        } else {
+            self.cache.put_reader(key, response, expected_sha256)
+        };
+        if let Some(transfer) = transfer {
+            transfer.finish();
+        }
+        result
     }
 }
 

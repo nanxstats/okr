@@ -17,6 +17,7 @@ use crate::digest::{TreeDigest, tree_digest};
 use crate::fetch::{CachedArtifact, Fetcher};
 use crate::hosttools::HostTools;
 use crate::lock::FetchMethod;
+use crate::progress::SyncProgress;
 use crate::resolve::dcf;
 use crate::resolve::{GithubRepository, Resolution, ResolvedEntry, ResolvedSource};
 use crate::{Error, Result};
@@ -60,6 +61,35 @@ pub fn vendor(
     fetcher: &Fetcher,
     tools: &HostTools,
 ) -> Result<VendorResult> {
+    vendor_inner(project_directory, config, resolution, fetcher, tools, None)
+}
+
+pub(crate) fn vendor_with_progress(
+    project_directory: &Path,
+    config: &Config,
+    resolution: &Resolution,
+    fetcher: &Fetcher,
+    tools: &HostTools,
+    progress: &SyncProgress,
+) -> Result<VendorResult> {
+    vendor_inner(
+        project_directory,
+        config,
+        resolution,
+        fetcher,
+        tools,
+        Some(progress),
+    )
+}
+
+fn vendor_inner(
+    project_directory: &Path,
+    config: &Config,
+    resolution: &Resolution,
+    fetcher: &Fetcher,
+    tools: &HostTools,
+    progress: Option<&SyncProgress>,
+) -> Result<VendorResult> {
     let target_root = project_directory.join(&config.vendor.path);
     let parent = target_root.parent().ok_or_else(|| {
         Error::Config(format!(
@@ -74,7 +104,11 @@ pub fn vendor(
     let mut entries = Vec::with_capacity(resolution.entries.len());
     let mut warnings = resolution.warnings.clone();
 
+    if let Some(progress) = progress {
+        progress.set_phase("Fetching and vendoring sources...");
+    }
     for entry in &resolution.entries {
+        let entry_progress = progress.map(|progress| progress.entry("Preparing", &entry.name));
         let destination = staging.path().join(&entry.name);
         let vendored = vendor_entry(
             parent,
@@ -85,6 +119,12 @@ pub fn vendor(
             tools,
             &mut warnings,
         )?;
+        if let Some(entry_progress) = entry_progress {
+            entry_progress.finish();
+        }
+        if let Some(progress) = progress {
+            progress.advance(format!("Prepared {}", entry.name));
+        }
         entries.push(vendored);
     }
 

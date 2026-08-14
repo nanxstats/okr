@@ -7,6 +7,7 @@ pub mod fetch;
 pub mod hosttools;
 pub mod lock;
 pub mod manifest;
+mod progress;
 pub mod resolve;
 pub mod rlib;
 pub mod spec;

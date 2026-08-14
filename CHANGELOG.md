@@ -9,6 +9,9 @@
 
 ### Improvements
 
+- Show interactive `okr sync` progress with an overall entry counter,
+  per-source spinners, and byte-level download bars, while keeping quiet,
+  verbose, and non-terminal output stable and uncluttered (#23).
 - Replace serialized per-file hash inventories in lockfiles and JSON manifests
   with aggregate tree digests, to keep generated metadata compact (#19).
 - Keep environment digests out of routine `okr sync` output unless `--verbose`

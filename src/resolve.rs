@@ -18,6 +18,7 @@ use crate::config::{Config, DeclaredEntry, DeclaredSource, EntryKind};
 use crate::fetch::Fetcher;
 use crate::hosttools::HostTools;
 use crate::lock::{FetchMethod, LockedPackage, LockedReference, Lockfile};
+use crate::progress::SyncProgress;
 use crate::spec::{RemoteLocation, RemoteRef, RemoteSpec, RemoteType, is_full_commit_sha};
 use crate::{Error, Result};
 
@@ -356,12 +357,39 @@ pub fn resolve(
     github: &dyn GithubReleaseApi,
     previous: Option<&Lockfile>,
 ) -> Result<Resolution> {
+    resolve_inner(config, fetcher, tools, github, previous, None)
+}
+
+pub(crate) fn resolve_with_progress(
+    config: &Config,
+    fetcher: &Fetcher,
+    tools: &HostTools,
+    github: &dyn GithubReleaseApi,
+    previous: Option<&Lockfile>,
+    progress: &SyncProgress,
+) -> Result<Resolution> {
+    resolve_inner(config, fetcher, tools, github, previous, Some(progress))
+}
+
+fn resolve_inner(
+    config: &Config,
+    fetcher: &Fetcher,
+    tools: &HostTools,
+    github: &dyn GithubReleaseApi,
+    previous: Option<&Lockfile>,
+    progress: Option<&SyncProgress>,
+) -> Result<Resolution> {
     let declarations = config.declared_entries()?;
     let mut entries = Vec::with_capacity(declarations.len());
     let mut warnings = Vec::new();
     let mut snapshot_index = None;
 
+    if let Some(progress) = progress {
+        progress.set_phase("Resolving sources...");
+    }
     for declaration in declarations {
+        let entry_progress =
+            progress.map(|progress| progress.entry("Resolving", &declaration.name));
         let resolved = match &declaration.source {
             DeclaredSource::Cran { requested_version } => resolve_cran_entry(
                 config,
@@ -385,6 +413,12 @@ pub fn resolve(
                 &mut warnings,
             )?,
         };
+        if let Some(entry_progress) = entry_progress {
+            entry_progress.finish();
+        }
+        if let Some(progress) = progress {
+            progress.advance(format!("Resolved {}", resolved.name));
+        }
         entries.push(resolved);
     }
 
