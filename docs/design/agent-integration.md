@@ -45,8 +45,8 @@ integrity fields. Its top-level shape is:
       "license": "Apache License (>= 2)",
       "path": "deps-src/admiral",
       "title": "...",
-      "tree-digest": "sha256:...",
-      "tarball-sha256": "..."
+      "tree_digest": "sha256:...",
+      "artifact_digest": "sha256:..."
     }
   ]
 }

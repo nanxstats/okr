@@ -9,12 +9,25 @@ source tree that an agent reads. Both matter.
 
 ## Artifact digest
 
-`tarball-sha256` identifies the downloaded archive or normalized clone archive
+`artifact-digest` identifies the downloaded archive or normalized clone archive
 stored in the cache. Direct `url` declarations require this digest up front;
 other sources acquire it during sync.
 
 The artifact digest protects transfer and cache integrity, but it cannot attest
 the result of extraction and pruning.
+
+## Digest naming and values
+
+Every serialized attestation field uses a `<subject>-digest` name and an
+algorithm-tagged value such as `sha256:<lowercase-hex>`. The lock therefore
+uses `config-digest`, `environment-digest`, `artifact-digest`, and
+`tree-digest`. The subject says which bytes are covered; the value says how
+they were digested. TOML keys use kebab case; their JSON manifest equivalents
+use snake_case (`environment_digest`, `artifact_digest`, and `tree_digest`).
+
+The `sha256` configuration key for a direct URL is intentionally
+algorithm-specific because it is an input pin. A git `commit` is a
+source control identifier rather than an okr content digest.
 
 ## Tree digest
 
@@ -46,11 +59,11 @@ Other deterministic lock properties include:
 - packages and references sorted by name within their kind;
 - `generated` set to snapshot midnight, or the Unix epoch for a remote-only
   lock, rather than wall-clock time;
-- a normalized configuration hash for staleness detection; and
+- a normalized configuration digest for staleness detection; and
 - stable TOML serialization.
 
 Comments and presentation changes in `okr.toml` do not affect its normalized
-configuration hash. Behavioral configuration changes do.
+configuration digest. Behavioral configuration changes do.
 
 ## Why fetch method is provenance
 
@@ -74,7 +87,7 @@ tree.
 - the exact generated Markdown and JSON manifests.
 
 Any tree or generated-file drift exits with code 4, independent of strictness.
-`status` reports whether the current normalized configuration hash still
+`status` reports whether the current normalized configuration digest still
 matches the lock, and `sync` creates a new lock whenever it does not.
 `--strict` adds a read-only comparison between locked package versions and the
 installed R library. R absence is a successful skip; a mismatch when inspection
