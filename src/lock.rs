@@ -21,7 +21,7 @@ pub struct Lockfile {
     pub generated: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<String>,
-    pub config_hash: String,
+    pub config_digest: String,
     pub environment_digest: String,
     #[serde(default, rename = "package")]
     pub packages: Vec<LockedPackage>,
@@ -43,8 +43,7 @@ pub struct LockedPackage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
     pub fetch_method: FetchMethod,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tarball_sha256: Option<String>,
+    pub artifact_digest: String,
     pub tree_digest: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
@@ -63,8 +62,7 @@ pub struct LockedReference {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
     pub fetch_method: FetchMethod,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tarball_sha256: Option<String>,
+    pub artifact_digest: String,
     pub tree_digest: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
@@ -116,7 +114,7 @@ impl Lockfile {
             okr_version: env!("CARGO_PKG_VERSION").into(),
             generated: deterministic_generated(snapshot.as_deref()),
             snapshot,
-            config_hash: config_hash(config)?,
+            config_digest: config_digest(config)?,
             environment_digest: String::new(),
             packages,
             references,
@@ -132,8 +130,11 @@ impl Lockfile {
                 path.display()
             ))
         })?;
-        toml::from_str(&contents)
-            .map_err(|error| Error::Config(format!("invalid {}: {error}", path.display())))
+        let lock: Self = toml::from_str(&contents)
+            .map_err(|error| Error::Config(format!("invalid {}: {error}", path.display())))?;
+        lock.validate_digests()
+            .map_err(|error| Error::Config(format!("invalid {}: {error}", path.display())))?;
+        Ok(lock)
     }
 
     pub fn load_optional(path: &Path) -> Result<Option<Self>> {
@@ -153,6 +154,9 @@ impl Lockfile {
             .references
             .sort_by(|left, right| left.name.cmp(&right.name));
         stable.environment_digest = stable.computed_environment_digest()?;
+        stable.validate_digests().map_err(|error| {
+            Error::Config(format!("cannot serialize invalid lockfile: {error}"))
+        })?;
         let mut output = toml::to_string_pretty(&stable)
             .map_err(|error| Error::Io(std::io::Error::other(error)))?;
         if !output.ends_with('\n') {
@@ -194,6 +198,32 @@ impl Lockfile {
         Ok(format!("sha256:{}", sha256_bytes(canonical)))
     }
 
+    fn validate_digests(&self) -> std::result::Result<(), String> {
+        validate_sha256_digest("config-digest", &self.config_digest)?;
+        validate_sha256_digest("environment-digest", &self.environment_digest)?;
+        for package in &self.packages {
+            validate_sha256_digest(
+                &format!("package.{}.artifact-digest", package.name),
+                &package.artifact_digest,
+            )?;
+            validate_sha256_digest(
+                &format!("package.{}.tree-digest", package.name),
+                &package.tree_digest,
+            )?;
+        }
+        for reference in &self.references {
+            validate_sha256_digest(
+                &format!("reference.{}.artifact-digest", reference.name),
+                &reference.artifact_digest,
+            )?;
+            validate_sha256_digest(
+                &format!("reference.{}.tree-digest", reference.name),
+                &reference.tree_digest,
+            )?;
+        }
+        Ok(())
+    }
+
     #[must_use]
     pub fn is_sorted(&self) -> bool {
         self.packages
@@ -206,7 +236,25 @@ impl Lockfile {
     }
 }
 
-pub fn config_hash(config: &Config) -> Result<String> {
+fn validate_sha256_digest(field: &str, digest: &str) -> std::result::Result<(), String> {
+    let Some(hex) = digest.strip_prefix("sha256:") else {
+        return Err(format!(
+            "{field} must use the `sha256:<64 lowercase hex characters>` format"
+        ));
+    };
+    if hex.len() != 64
+        || !hex
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err(format!(
+            "{field} must use the `sha256:<64 lowercase hex characters>` format"
+        ));
+    }
+    Ok(())
+}
+
+pub fn config_digest(config: &Config) -> Result<String> {
     let normalized = toml::to_string(config)
         .map_err(|error| Error::Config(format!("could not normalize okr.toml: {error}")))?;
     Ok(format!("sha256:{}", sha256_bytes(normalized)))
@@ -228,7 +276,7 @@ fn lock_package(resolved: &ResolvedEntry, tree: &VendoredEntry) -> Result<Locked
         reference,
         commit,
         fetch_method: tree.fetch_method,
-        tarball_sha256: Some(tree.artifact_sha256.clone()),
+        artifact_digest: format!("sha256:{}", tree.artifact_sha256),
         tree_digest: tree.tree.digest.clone(),
         license: tree.license.clone(),
     })
@@ -243,7 +291,7 @@ fn lock_reference(resolved: &ResolvedEntry, tree: &VendoredEntry) -> LockedRefer
         reference,
         commit,
         fetch_method: tree.fetch_method,
-        tarball_sha256: Some(tree.artifact_sha256.clone()),
+        artifact_digest: format!("sha256:{}", tree.artifact_sha256),
         tree_digest: tree.tree.digest.clone(),
         license: tree.license.clone(),
     }
@@ -610,7 +658,7 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{FetchMethod, LockedPackage, LockedReference, Lockfile, config_hash};
+    use super::{FetchMethod, LockedPackage, LockedReference, Lockfile, config_digest};
     use crate::config::Config;
 
     fn example_lock() -> Lockfile {
@@ -619,7 +667,7 @@ mod tests {
             okr_version: "0.1.0".into(),
             generated: "2026-06-30T00:00:00Z".into(),
             snapshot: Some("2026-06-30".into()),
-            config_hash: format!("sha256:{}", "a".repeat(64)),
+            config_digest: format!("sha256:{}", "a".repeat(64)),
             environment_digest: format!("sha256:{}", "b".repeat(64)),
             packages: vec![LockedPackage {
                 name: "rpact".into(),
@@ -629,7 +677,7 @@ mod tests {
                 reference: None,
                 commit: None,
                 fetch_method: FetchMethod::Tarball,
-                tarball_sha256: Some("c".repeat(64)),
+                artifact_digest: format!("sha256:{}", "c".repeat(64)),
                 tree_digest: format!("sha256:{}", "d".repeat(64)),
                 license: Some("LGPL-2.1".into()),
             }],
@@ -640,7 +688,7 @@ mod tests {
                 reference: Some("main".into()),
                 commit: Some("e".repeat(40)),
                 fetch_method: FetchMethod::GitClone,
-                tarball_sha256: Some("f".repeat(64)),
+                artifact_digest: format!("sha256:{}", "f".repeat(64)),
                 tree_digest: format!("sha256:{}", "0".repeat(64)),
                 license: None,
             }],
@@ -677,7 +725,22 @@ mod tests {
     }
 
     #[test]
-    fn config_hash_ignores_toml_comments_and_formatting() {
+    fn load_rejects_untagged_or_noncanonical_digest_values() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("okr.lock");
+        let encoded = toml::to_string(&example_lock()).unwrap();
+        fs::write(
+            &path,
+            encoded.replacen(&format!("sha256:{}", "c".repeat(64)), &"C".repeat(64), 1),
+        )
+        .unwrap();
+        let error = Lockfile::load(&path).unwrap_err();
+        assert!(error.to_string().contains("package.rpact.artifact-digest"));
+        assert!(error.to_string().contains("sha256:<64 lowercase hex"));
+    }
+
+    #[test]
+    fn config_digest_ignores_toml_comments_and_formatting() {
         let first = Config::parse(
             "# heading\n[project]\nstrict = false\n[packages]\npkg = \"owner/repo@main\"\n",
         )
@@ -686,7 +749,10 @@ mod tests {
             "[project]\nstrict=false\n\n[packages]\n# package\npkg=\"owner/repo@main\"",
         )
         .unwrap();
-        assert_eq!(config_hash(&first).unwrap(), config_hash(&second).unwrap());
+        assert_eq!(
+            config_digest(&first).unwrap(),
+            config_digest(&second).unwrap()
+        );
     }
 
     #[test]
@@ -717,7 +783,7 @@ mod tests {
             okr_version: "0.1.0".into(),
             generated: "1970-01-01T00:00:00Z".into(),
             snapshot: None,
-            config_hash: format!("sha256:{}", "1".repeat(64)),
+            config_digest: format!("sha256:{}", "1".repeat(64)),
             environment_digest: String::new(),
             packages: vec![LockedPackage {
                 name: "pkg".into(),
@@ -727,7 +793,7 @@ mod tests {
                 reference: Some("v1".into()),
                 commit: Some("2".repeat(40)),
                 fetch_method: FetchMethod::ForgeTarball,
-                tarball_sha256: Some("3".repeat(64)),
+                artifact_digest: format!("sha256:{}", "3".repeat(64)),
                 tree_digest: tree.digest,
                 license: Some("MIT".into()),
             }],

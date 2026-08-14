@@ -9,7 +9,7 @@
 Installed R packages are poor context for coding agents. R code is packed into
 binary lazy load databases (`.rdb`/`.rdx`), while compiled package `src/` trees
 are stripped at installation time. `okr` vendors exact source trees into a
-greppable synthetic monorepo with records hashes.
+greppable synthetic monorepo with recorded integrity digests.
 
 ## Install
 
@@ -46,7 +46,7 @@ okr verify --strict --json
 `verify` always treats vendor-tree drift as an exit-4 failure. `--strict` also
 requires the read-only installed-library coherence check when R is available.
 Use `okr sync --offline` to rebuild entirely from the local content-addressed
-cache. The compact lock records an acquisition-artifact hash and one aggregate
+cache. The compact lock records an acquisition-artifact digest and one aggregate
 digest for each post-pruning source tree; verification recomputes the latter
 from every vendored file.
 

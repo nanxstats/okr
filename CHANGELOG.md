@@ -1,5 +1,13 @@
 # Changelog
 
+## okr (development version)
+
+### Improvements
+
+- Standardize generated integrity fields on subject-based digest names and
+  `sha256:<hex>` values: `config-digest`, `environment-digest`, `artifact-digest`,
+  and `tree-digest` in TOML, with snake case equivalents in JSON (#30).
+
 ## okr 0.1.2
 
 ### Bug fixes

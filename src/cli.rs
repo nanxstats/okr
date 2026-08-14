@@ -13,7 +13,7 @@ use toml_edit::{DocumentMut, Item, Table, Value, value};
 use crate::config::{Config, DEFAULT_REPO_URL};
 use crate::fetch::{Cache, Fetcher};
 use crate::hosttools::HostTools;
-use crate::lock::{Lockfile, VerificationReport, config_hash, verify_vendor};
+use crate::lock::{Lockfile, VerificationReport, config_digest, verify_vendor};
 use crate::manifest::{update_agents_file, update_gitignore, write_manifests};
 use crate::progress::SyncProgress;
 use crate::resolve::{TieredGithubApi, resolve_with_progress};
@@ -409,10 +409,10 @@ fn run_status(config_path: &Path, json: bool, quiet: bool, _verbose: bool) -> Re
     let cache = Cache::from_environment()?;
     let cache_stats = cache.stats()?;
     let inspection = crate::rlib::inspect_in(&project);
-    let current_config_hash = config_hash(&config)?;
+    let current_config_digest = config_digest(&config)?;
     let lock_fresh = lock
         .as_ref()
-        .map(|lock| lock.config_hash == current_config_hash);
+        .map(|lock| lock.config_digest == current_config_digest);
     let verification = lock
         .as_ref()
         .map(|lock| verify_vendor(&project, &config, lock));
@@ -578,7 +578,7 @@ fn print_human_status(
             println!("lock: fresh ({})", lock.environment_digest);
         }
         (Some(lock), Some(false)) => {
-            println!("lock: stale config hash ({})", lock.environment_digest);
+            println!("lock: stale config digest ({})", lock.environment_digest);
         }
         (Some(_), None) => println!("lock: present"),
     }
@@ -639,10 +639,10 @@ fn run_sync(
     let config = Config::load(config_path)?;
     let lock_path = project_directory.join("okr.lock");
     let previous = Lockfile::load_optional(&lock_path)?;
-    let expected_config_hash = config_hash(&config)?;
+    let expected_config_digest = config_digest(&config)?;
     let fresh_previous = previous
         .as_ref()
-        .filter(|lock| lock.config_hash == expected_config_hash);
+        .filter(|lock| lock.config_digest == expected_config_digest);
     let entry_count = config.declared_entries()?.len();
     let progress = SyncProgress::new(entry_count, quiet, verbose);
 

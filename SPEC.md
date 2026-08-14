@@ -47,7 +47,7 @@ snapshot, but executing it is the user's (or their package manager's) job.
 3. Guarantee **version--source coherence** between the vendored tree and the
    declared/locked versions; *diagnose* (not enforce, by default) coherence
    with the user's installed library.
-4. Produce a compact lockfile with aggregate content hashes sufficient for
+4. Produce a compact lockfile with aggregate content digests sufficient for
    byte-level verification and an environment digest for stamping benchmark
    runs.
 5. Generate agent-facing manifests so coding agents discover the vendored
@@ -73,7 +73,8 @@ snapshot, but executing it is the user's (or their package manager's) job.
 ## 5. Core concepts
 
 - **`okr.toml`** - declarative project config (committed).
-- **`okr.lock`** - resolved versions, refs, URLs, hashes, digests (committed).
+- **`okr.lock`** - resolved versions, refs, URLs, and integrity digests
+  (committed).
 - **Vendor tree** - `deps-src/` by default; one directory per entry.
 - **Package** - an R package, vendored at an exact version; participates in
   version resolution and library-coherence diagnostics.
@@ -85,7 +86,7 @@ snapshot, but executing it is the user's (or their package manager's) job.
   (`https://packagemanager.posit.co/cran/<YYYY-MM-DD>`) used to resolve and
   fetch CRAN sources. Required iff any CRAN package is declared.
 - **Cache** - content-addressed download cache at `$OKR_CACHE_DIR`
-  (default `~/.cache/okr`), keyed by sha256.
+  (default `~/.cache/okr`), keyed by SHA-256 digest.
 - **Manifest** - `deps-src/_manifest.json` (machine) and
   `deps-src/_manifest.md` (agent/human). R package names must start with a
   letter, so `_`-prefixed files cannot collide with package directories.
@@ -142,7 +143,7 @@ Re-running `sync` with an up-to-date lock and intact tree is a no-op
 (fast-path via digest comparison).
 
 **`status`** - Report: R presence/version (advisory vs `project.r-version`),
-lock freshness (config hash vs lock), vendor-tree integrity spot-check,
+lock freshness (config digest vs lock), vendor-tree integrity spot-check,
 library coherence summary, cache stats, and the copy-paste companion install
 line, for example:
 
@@ -311,8 +312,8 @@ version = 1                          # lockfile schema
 okr-version = "0.1.0"
 generated = "2026-06-30T00:00:00Z"
 snapshot = "2026-06-30"              # present iff CRAN entries exist
-config-hash = "sha256:..."             # normalized okr.toml hash, staleness detection
-environment-digest = "sha256:..."      # hash over all entries below; the benchmark stamp
+config-digest = "sha256:..."           # normalized okr.toml digest, staleness detection
+environment-digest = "sha256:..."      # digest over all entries below; the benchmark stamp
 
 [[package]]
 name = "rpact"
@@ -320,7 +321,7 @@ version = "4.2.1"
 source = "cran"
 url = "https://packagemanager.posit.co/cran/2026-06-30/src/contrib/rpact_4.2.1.tar.gz"
 fetch-method = "tarball"
-tarball-sha256 = "..."
+artifact-digest = "sha256:..."
 tree-digest = "sha256:..."
 license = "LGPL-2.1"
 
@@ -331,7 +332,7 @@ source = "github::pharmaverse/admiral"
 ref = "v1.3.0"
 commit = "9f2c..."
 fetch-method = "forge-tarball"       # tarball | forge-tarball | gh | git-clone
-tarball-sha256 = "..."
+artifact-digest = "sha256:..."
 tree-digest = "sha256:..."
 license = "Apache License (>= 2)"
 
@@ -341,13 +342,29 @@ source = "git::git@ghe.corp.example:stds/cdisc.git"
 ref = "2026-Q2"
 commit = "77ab..."
 fetch-method = "git-clone"
+artifact-digest = "sha256:..."
 tree-digest = "sha256:..."
 ```
+
+Serialized integrity fields follow one convention: the key is
+`<subject>-digest`, while the value carries the algorithm as
+`<algorithm>:<lowercase-hex>`. The current algorithm is SHA-256. Keeping the
+algorithm out of the key avoids another field rename if the algorithm changes.
+The `sha256` key accepted for direct-URL declarations is intentionally
+different: it is an algorithm-specific input pin, not a generic serialized
+attestation field. A git `commit` is likewise a source-control identifier,
+not an okr content digest.
+
+`config-digest` detects behavioral changes in normalized `okr.toml` content;
+comments and formatting do not affect it.
 
 `environment-digest` is deterministic given identical lock content and is
 the value an eval harness records per run and asserts via `okr verify`.
 
-`tarball-sha256` attests the cached acquisition artifact. It cannot replace
+`artifact-digest` attests the cached acquisition artifact. The neutral
+"artifact" name covers both downloaded archives and normalized archives
+created from clone-produced trees. Every package and reference entry has one.
+It cannot replace
 `tree-digest`: extraction and pruning produce a different byte set, and a
 clone source is cached as a normalized tarball only after pruning. The tree
 digest attests the source bytes agents actually read. `okr` computes it from

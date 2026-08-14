@@ -15,8 +15,8 @@ expression: "render(&config, &lock, &vendored).unwrap().json"
       "license": "MIT",
       "path": "deps-src/tinyone",
       "title": "First Tiny Fixture Package",
-      "tree-digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-      "tarball-sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      "tree_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "artifact_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     },
     {
       "kind": "reference",
@@ -27,8 +27,8 @@ expression: "render(&config, &lock, &vendored).unwrap().json"
       "license": "Apache-2.0",
       "path": "deps-src/standards",
       "title": null,
-      "tree-digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-      "tarball-sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+      "tree_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "artifact_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
     }
   ]
 }
