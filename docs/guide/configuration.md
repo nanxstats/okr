@@ -1,0 +1,114 @@
+---
+icon: lucide/settings-2
+---
+
+# Configuration
+
+`okr.toml` declares the source context for one project. It is intended to be
+reviewed and committed. All paths are resolved relative to the directory that
+contains the configuration file, including when `--config` selects a file
+outside the current directory.
+
+Unknown keys are hard errors at every level. This makes misspelled settings
+fail immediately instead of silently changing reproducibility.
+
+## Complete example
+
+```toml
+[project]
+name = "trial-design-bench"
+r-version = "4.5.1"
+snapshot = "2026-06-30"
+strict = false
+# repo-url = "https://packagemanager.posit.co/cran"
+
+[vendor]
+path = "deps-src"
+include-tests = true
+exclude = []
+gitignore = true
+
+[manifest]
+agents-file = true
+
+[packages]
+rpact = "*"
+gsDesign = "3.6.4"
+admiral = "pharmaverse/admiral@v1.3.0"
+simlib = { git = "git@ghe.example:stats/simlib.git", ref = "v2.1" }
+internalpkg = { url = "https://example.com/internalpkg_0.2.1.tar.gz", sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
+rtables = { spec = "insightsengineering/rtables@v0.6.13", exclude = ["vignettes/**"] }
+
+[references]
+cdisc-standards = "git::git@ghe.example:stds/cdisc.git@2026-Q2"
+protocol-templates = { git = "https://codeberg.org/org/protocols.git", ref = "main" }
+```
+
+## Project settings
+
+| Key | Default | Meaning |
+|---|---|---|
+| `name` | unset | Optional project label. |
+| `r-version` | unset | Expected R version for advisory status output; `okr` never installs it. |
+| `snapshot` | unset | Exact `YYYY-MM-DD` CRAN snapshot. Required when any CRAN package is declared. |
+| `strict` | `false` | Make installed-library version mismatches fail `sync`, `status`, and `verify` with exit code 4. |
+| `repo-url` | Posit Package Manager CRAN | Base URL for a compatible dated CRAN repository or mirror. |
+
+`okr init` fills `snapshot` with the latest available exact date found in a
+bounded 14-day search. It never writes a moving `latest` alias. A remote-only
+configuration may omit the snapshot.
+
+## Vendor settings
+
+| Key | Default | Meaning |
+|---|---|---|
+| `path` | `"deps-src"` | Normalized project-relative destination directory. Absolute paths and `..` are rejected. |
+| `include-tests` | `true` | Keep package test suites unless an entry overrides the setting. |
+| `exclude` | `[]` | Additional case-insensitive glob patterns applied to every entry. |
+| `gitignore` | `true` | Ensure the vendor directory has a root-relative entry in `.gitignore`. |
+
+Package sources receive R-specific default pruning before the additional
+exclude patterns are applied. Reference repositories retain everything except
+version-control metadata by default. See [source declarations](sources.md#pruning)
+for the exact behavior.
+
+Set `gitignore = false` when the vendored sources should be committed, such as
+in a sealed benchmark repository. If `init` already added `/deps-src/`, remove
+that line from `.gitignore` yourself; disabling management does not delete an
+existing entry. The lockfile still makes tree drift detectable.
+
+## Manifest settings
+
+`agents-file = true` maintains an `okr` marker block in `AGENTS.md`. Only text
+between `<!-- okr:begin -->` and `<!-- okr:end -->` is replaced; existing
+instructions outside the block are preserved. Setting it to `false` disables
+future updates.
+
+## Entry values
+
+`[packages]` and `[references]` map a safe directory name to either a string or
+a table. Entry names may contain ASCII letters, digits, `.`, `_`, and `-`;
+package names must start with a letter. A name cannot occur in both sections.
+
+The table form accepts exactly one of `spec`, `git`, or `url`, plus these
+optional keys:
+
+| Key | Meaning |
+|---|---|
+| `ref` | Branch, tag, or commit, when not already present in `spec`. |
+| `sha256` | Required 64-character artifact digest for `url` sources; invalid for other sources. |
+| `exclude` | Extra case-insensitive globs for this entry. |
+| `include-tests` | Per-package override of `vendor.include-tests`. |
+
+For all supported string forms and examples, see
+[source declarations](sources.md).
+
+## Editing with `okr add`
+
+`okr add` uses a format-preserving TOML editor. It retains comments and layout,
+creates a missing `[packages]` or `[references]` table, and refuses to replace
+an existing entry. Edit table-only options such as a direct URL digest or
+per-entry pruning rules in `okr.toml` yourself.
+
+After any declaration or pruning change, run `okr sync` to produce a new lock
+and source tree.
