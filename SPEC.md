@@ -111,9 +111,14 @@ Global flags: --config <path>  --quiet  --verbose  --json (where noted)
 
 ### Command semantics
 
-**`init`** - Write `okr.toml` (from a profile template if given). Refuses to
-overwrite without `--force`. Offers to append the vendor path to `.gitignore`
-(see §12).
+**`init`** - Write `okr.toml` (from a profile template if given). For the
+default template, probe the PPM `PACKAGES.gz` index from the current UTC date
+backward through a bounded 14-day window, and write the first available exact
+date as `project.snapshot`. The successful index response is cached for the
+first sync. Connectivity and server failures are fetch errors; only a missing
+snapshot advances to the previous date. Never write the moving `latest` alias,
+because the configured snapshot must remain reproducible. Refuses to overwrite
+without `--force`. Offers to append the vendor path to `.gitignore` (see §12).
 
 **`add`** - Parse each `<spec>` per the grammar in §7 and insert it into
 `[packages]` (or `[references]` with `--reference`), preserving user comments

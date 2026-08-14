@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command as ProcessCommand;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
@@ -13,6 +14,7 @@ fn init_writes_the_safe_template_and_requires_force_to_replace_it() {
     let cache = project.path().join("cache");
     let empty_path = project.path().join("empty-path");
     fs::create_dir(&empty_path).unwrap();
+    let snapshot = seed_current_snapshot(&cache);
 
     okr(project.path(), &cache, &empty_path)
         .arg("init")
@@ -22,11 +24,22 @@ fn init_writes_the_safe_template_and_requires_force_to_replace_it() {
     let template = fs::read_to_string(project.path().join("okr.toml")).unwrap();
     assert!(template.contains("[packages]"));
     assert!(template.contains("[references]"));
-    assert!(template.contains("# snapshot"));
+    assert!(template.contains(&format!("snapshot = \"{snapshot}\"")));
+    assert!(!template.contains("# snapshot"));
     assert_eq!(
         fs::read_to_string(project.path().join(".gitignore")).unwrap(),
         "/deps-src/\n"
     );
+    okr(project.path(), &cache, &empty_path)
+        .args(["add", "ggsci"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("added ggsci"));
+    let added = fs::read_to_string(project.path().join("okr.toml")).unwrap();
+    let parsed = okr::config::Config::parse(&added).unwrap();
+    assert_eq!(parsed.project.snapshot.as_deref(), Some(snapshot.as_str()));
+    assert!(parsed.packages.contains_key("ggsci"));
+
     okr(project.path(), &cache, &empty_path)
         .arg("init")
         .assert()
@@ -218,4 +231,21 @@ fn fixture_path(relative: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures")
         .join(relative)
+}
+
+fn seed_current_snapshot(cache: &Path) -> String {
+    let output = ProcessCommand::new("/bin/date")
+        .args(["-u", "+%F"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let snapshot = String::from_utf8(output.stdout).unwrap().trim().to_owned();
+    let key = format!(
+        "url:{}/{snapshot}/src/contrib/PACKAGES.gz",
+        okr::config::DEFAULT_REPO_URL
+    );
+    okr::fetch::Cache::new(cache)
+        .put_bytes(&key, b"cached test snapshot", None)
+        .unwrap();
+    snapshot
 }

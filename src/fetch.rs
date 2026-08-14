@@ -279,11 +279,28 @@ impl Fetcher {
         expected_sha256: Option<&str>,
         label: &str,
     ) -> Result<CachedArtifact> {
+        self.fetch_url_if_exists(url, expected_sha256, label)?
+            .ok_or_else(|| {
+                Error::Fetch(format!(
+                    "could not fetch {label} from {url}: HTTP 404 Not Found"
+                ))
+            })
+    }
+
+    /// Fetch an artifact, returning `None` only when the server reports that
+    /// the URL does not exist. Successful responses use the normal verified
+    /// content-addressed cache.
+    pub(crate) fn fetch_url_if_exists(
+        &self,
+        url: &str,
+        expected_sha256: Option<&str>,
+        label: &str,
+    ) -> Result<Option<CachedArtifact>> {
         let key = format!("url:{url}");
         if let Some(expected) = expected_sha256
             && let Some(hit) = self.cache.get(expected)?
         {
-            return Ok(hit);
+            return Ok(Some(hit));
         }
         if let Some(hit) = self.cache.lookup(&key)? {
             if let Some(expected) = expected_sha256
@@ -295,7 +312,7 @@ impl Fetcher {
                     normalize_digest(expected)?
                 )));
             }
-            return Ok(hit);
+            return Ok(Some(hit));
         }
         if self.offline {
             return Err(Error::Fetch(format!(
@@ -305,12 +322,15 @@ impl Fetcher {
 
         if url.starts_with("file://") {
             let path = file_url_path(url)?;
-            return self.cache.put_file(&key, &path, expected_sha256);
+            return self.cache.put_file(&key, &path, expected_sha256).map(Some);
         }
 
         let response = self.client.get(url).send().map_err(|error| {
             Error::Fetch(format!("could not fetch {label} from {url}: {error}"))
         })?;
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
         if !response.status().is_success() {
             return Err(Error::Fetch(format!(
                 "could not fetch {label} from {url}: HTTP {}",
@@ -318,6 +338,7 @@ impl Fetcher {
             )));
         }
         self.cache_response(&key, response, expected_sha256, label)
+            .map(Some)
     }
 
     pub fn fetch_url_with_bearer(
@@ -477,6 +498,9 @@ fn encode_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io::{Read as _, Write as _};
+    use std::net::TcpListener;
+    use std::thread;
 
     use flate2::read::GzDecoder;
     use tempfile::tempdir;
@@ -531,6 +555,36 @@ mod tests {
             .unwrap_err();
         assert!(error.to_string().contains("offline mode"));
         assert!(error.to_string().contains("package pkg"));
+    }
+
+    #[test]
+    fn optional_fetch_distinguishes_http_not_found_from_other_failures() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let bytes_read = stream.read(&mut request).unwrap();
+            assert!(bytes_read > 0);
+            stream
+                .write_all(
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+        });
+        let directory = tempdir().unwrap();
+        let fetcher = Fetcher::new(Cache::new(directory.path()), false).unwrap();
+        let result = fetcher
+            .fetch_url_if_exists(
+                &format!("http://{address}/missing"),
+                None,
+                "missing fixture",
+            )
+            .unwrap();
+
+        server.join().unwrap();
+        assert_eq!(result, None);
+        assert_eq!(fetcher.cache().stats().unwrap().artifacts, 0);
     }
 
     #[test]
