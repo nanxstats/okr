@@ -20,10 +20,14 @@ cargo install okr
 
 ```console
 okr init
-okr add pharmaverse/admiral@v1.3.0
+okr add ggsci
 okr sync
 # Point your coding agent at deps-src/
 ```
+
+`okr init` selects and writes the latest available exact dated CRAN snapshot,
+so a bare CRAN package can be added immediately. It checks from the current UTC
+date backward and keeps the successful package index in the download cache.
 
 `okr sync` writes `okr.lock`, `deps-src/_manifest.json`, and
 `deps-src/_manifest.md`. Repeating it with an intact tree is a no-op.

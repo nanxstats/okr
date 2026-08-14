@@ -3,13 +3,14 @@
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 use tempfile::NamedTempFile;
 use toml_edit::{DocumentMut, Item, Table, Value, value};
 
-use crate::config::Config;
+use crate::config::{Config, DEFAULT_REPO_URL};
 use crate::fetch::{Cache, Fetcher};
 use crate::hosttools::HostTools;
 use crate::lock::{Lockfile, VerificationReport, config_hash, verify_vendor};
@@ -79,7 +80,7 @@ pub struct InitArgs {
 
 #[derive(Debug, Args)]
 #[command(
-    after_long_help = "Examples:\n  okr add rpact\n  okr add pharmaverse/admiral@v1.3.0\n  okr add github::tidyverse/ggplot2\n  okr add r-lib/testthat@*release\n  okr add gitlab::jimhester/covr@abc123\n  okr add bitbucket::sulab/mygene.r@default\n  okr add git::git@ghe.example:stats/simlib.git@v2.1\n  okr add --reference git::https://codeberg.org/org/protocols.git@main\n\nDirect url:: tarballs require table form in okr.toml so a sha256 can be declared. Bare names such as `rpact` add a CRAN `*` entry and require project.snapshot."
+    after_long_help = "Examples:\n  okr add rpact\n  okr add pharmaverse/admiral@v1.3.0\n  okr add github::tidyverse/ggplot2\n  okr add r-lib/testthat@*release\n  okr add gitlab::jimhester/covr@abc123\n  okr add bitbucket::sulab/mygene.r@default\n  okr add git::git@ghe.example:stats/simlib.git@v2.1\n  okr add --reference git::https://codeberg.org/org/protocols.git@main\n\nDirect url:: tarballs require table form in okr.toml so a sha256 can be declared. Bare names such as `rpact` add a CRAN `*` entry against project.snapshot."
 )]
 pub struct AddArgs {
     /// Source specifications to add.
@@ -147,10 +148,14 @@ pub fn run(cli: Cli) -> Result<()> {
     }
 }
 
-const DEFAULT_CONFIG: &str = r#"[project]
+const SNAPSHOT_LOOKBACK_DAYS: i64 = 14;
+
+fn default_config(snapshot: &str) -> String {
+    format!(
+        r#"[project]
 # name = "my-r-project"
 # r-version = "4.5.1"      # advisory only
-# snapshot = "2026-06-30"  # required when adding CRAN packages
+snapshot = "{snapshot}"    # latest available dated snapshot when initialized
 strict = false
 
 [vendor]
@@ -165,7 +170,9 @@ agents-file = true
 [packages]
 
 [references]
-"#;
+"#
+    )
+}
 
 fn run_init(config_path: &Path, args: &InitArgs, quiet: bool) -> Result<()> {
     if args.profile.is_some() {
@@ -180,8 +187,10 @@ fn run_init(config_path: &Path, args: &InitArgs, quiet: bool) -> Result<()> {
             config_path.display()
         )));
     }
-    let config = Config::parse(DEFAULT_CONFIG)?;
-    atomic_write_preserving_permissions(config_path, DEFAULT_CONFIG)?;
+    let snapshot = discover_default_snapshot()?;
+    let contents = default_config(&snapshot);
+    let config = Config::parse(&contents)?;
+    atomic_write_preserving_permissions(config_path, &contents)?;
     let project = project_directory(config_path);
     update_gitignore(&project, &config)?;
     if !quiet {
@@ -193,6 +202,95 @@ fn run_init(config_path: &Path, args: &InitArgs, quiet: bool) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn discover_default_snapshot() -> Result<String> {
+    let cache = Cache::from_environment()?;
+    let fetcher = Fetcher::new(cache, false)?;
+    let today = SnapshotDate::today_utc()?;
+    let snapshot = find_available_snapshot(today, |candidate| {
+        let url = format!("{DEFAULT_REPO_URL}/{candidate}/src/contrib/PACKAGES.gz");
+        fetcher
+            .fetch_url_if_exists(
+                &url,
+                None,
+                &format!("CRAN snapshot {candidate} PACKAGES index"),
+            )
+            .map(|artifact| artifact.is_some())
+    })?;
+    snapshot.ok_or_else(|| {
+        let oldest = today.previous(SNAPSHOT_LOOKBACK_DAYS - 1);
+        Error::Fetch(format!(
+            "could not find an available dated CRAN snapshot at {DEFAULT_REPO_URL} between {oldest} and {today}"
+        ))
+    })
+}
+
+fn find_available_snapshot(
+    today: SnapshotDate,
+    mut is_available: impl FnMut(&str) -> Result<bool>,
+) -> Result<Option<String>> {
+    for offset in 0..SNAPSHOT_LOOKBACK_DAYS {
+        let candidate = today.previous(offset).to_string();
+        if is_available(&candidate)? {
+            return Ok(Some(candidate));
+        }
+    }
+    Ok(None)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SnapshotDate {
+    days_since_epoch: i64,
+}
+
+impl SnapshotDate {
+    fn today_utc() -> Result<Self> {
+        let elapsed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|error| {
+                Error::Io(std::io::Error::other(format!(
+                    "system clock is before the Unix epoch: {error}"
+                )))
+            })?;
+        let days_since_epoch = i64::try_from(elapsed.as_secs() / 86_400)
+            .map_err(|error| Error::Io(std::io::Error::other(error)))?;
+        Ok(Self { days_since_epoch })
+    }
+
+    const fn previous(self, days: i64) -> Self {
+        Self {
+            days_since_epoch: self.days_since_epoch - days,
+        }
+    }
+
+    fn civil(self) -> (i64, i64, i64) {
+        // Howard Hinnant's civil-from-days algorithm, with day zero at
+        // 1970-01-01. This keeps initialization dependency-free.
+        let shifted = self.days_since_epoch + 719_468;
+        let era = if shifted >= 0 {
+            shifted
+        } else {
+            shifted - 146_096
+        } / 146_097;
+        let day_of_era = shifted - era * 146_097;
+        let year_of_era =
+            (day_of_era - day_of_era / 1_460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+        let mut year = year_of_era + era * 400;
+        let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+        let month_prime = (5 * day_of_year + 2) / 153;
+        let day = day_of_year - (153 * month_prime + 2) / 5 + 1;
+        let month = month_prime + if month_prime < 10 { 3 } else { -9 };
+        year += i64::from(month <= 2);
+        (year, month, day)
+    }
+}
+
+impl std::fmt::Display for SnapshotDate {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (year, month, day) = self.civil();
+        write!(formatter, "{year:04}-{month:02}-{day:02}")
+    }
 }
 
 fn run_add(config_path: &Path, args: &AddArgs, quiet: bool) -> Result<()> {
@@ -871,10 +969,79 @@ fn atomic_write_preserving_permissions(path: &Path, contents: &str) -> Result<()
 mod tests {
     use clap::CommandFactory;
 
-    use super::Cli;
+    use super::{
+        Cli, SNAPSHOT_LOOKBACK_DAYS, SnapshotDate, default_config, find_available_snapshot,
+    };
+    use crate::{Error, config::Config};
 
     #[test]
     fn clap_definition_is_consistent() {
         Cli::command().debug_assert();
+    }
+
+    #[test]
+    fn snapshot_dates_are_rendered_across_calendar_boundaries() {
+        let unix_epoch = SnapshotDate {
+            days_since_epoch: 0,
+        };
+        assert_eq!(unix_epoch.to_string(), "1970-01-01");
+        assert_eq!(unix_epoch.previous(1).to_string(), "1969-12-31");
+
+        let march_2000 = SnapshotDate {
+            days_since_epoch: 11_017,
+        };
+        assert_eq!(march_2000.to_string(), "2000-03-01");
+        assert_eq!(march_2000.previous(1).to_string(), "2000-02-29");
+    }
+
+    #[test]
+    fn initialization_selects_the_first_available_dated_snapshot() {
+        let today = SnapshotDate {
+            days_since_epoch: 11_017,
+        };
+        let mut tried = Vec::new();
+        let selected = find_available_snapshot(today, |candidate| {
+            tried.push(candidate.to_owned());
+            Ok(candidate == "2000-02-28")
+        })
+        .unwrap();
+
+        assert_eq!(selected.as_deref(), Some("2000-02-28"));
+        assert_eq!(tried, ["2000-03-01", "2000-02-29", "2000-02-28"]);
+    }
+
+    #[test]
+    fn initialization_stops_after_the_bounded_snapshot_lookback() {
+        let today = SnapshotDate {
+            days_since_epoch: 11_017,
+        };
+        let mut attempts = 0;
+        let selected = find_available_snapshot(today, |_| {
+            attempts += 1;
+            Ok(false)
+        })
+        .unwrap();
+
+        assert_eq!(selected, None);
+        assert_eq!(attempts, SNAPSHOT_LOOKBACK_DAYS);
+    }
+
+    #[test]
+    fn snapshot_probe_errors_are_not_misreported_as_missing_dates() {
+        let today = SnapshotDate {
+            days_since_epoch: 11_017,
+        };
+        let error =
+            find_available_snapshot(today, |_| Err(Error::Fetch("network unavailable".into())))
+                .unwrap_err();
+        assert!(error.to_string().contains("network unavailable"));
+    }
+
+    #[test]
+    fn default_config_contains_a_valid_active_snapshot() {
+        let rendered = default_config("2000-02-29");
+        let config = Config::parse(&rendered).unwrap();
+        assert_eq!(config.project.snapshot.as_deref(), Some("2000-02-29"));
+        assert!(!rendered.contains("# snapshot"));
     }
 }

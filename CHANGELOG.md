@@ -9,6 +9,9 @@
 
 ### Improvements
 
+- Initialize `project.snapshot` to the latest available dated CRAN snapshot,
+  searching backward from the current UTC date, so the first bare
+  `okr add` succeeds without a manual configuration edit (#24).
 - Show interactive `okr sync` progress with an overall entry counter,
   per-source spinners, and byte-level download bars, while keeping quiet,
   verbose, and non-terminal output stable and uncluttered (#23).
