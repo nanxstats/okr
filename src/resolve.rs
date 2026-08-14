@@ -450,7 +450,7 @@ fn resolve_cran_entry(
             },
             exclude: declaration.exclude.clone(),
             include_tests: declaration.include_tests,
-            artifact_sha256: prior.tarball_sha256.clone(),
+            artifact_sha256: Some(locked_artifact_sha256(&prior.artifact_digest).to_owned()),
             preferred_fetch_method: Some(prior.fetch_method),
         });
     }
@@ -486,7 +486,8 @@ fn resolve_cran_entry(
         },
         exclude: declaration.exclude.clone(),
         include_tests: declaration.include_tests,
-        artifact_sha256: prior.and_then(|entry| entry.tarball_sha256.clone()),
+        artifact_sha256: prior
+            .map(|entry| locked_artifact_sha256(&entry.artifact_digest).to_owned()),
         preferred_fetch_method: prior.map(|entry| entry.fetch_method),
     })
 }
@@ -625,7 +626,7 @@ fn resolve_remote_entry(
         exclude: declaration.exclude.clone(),
         include_tests: declaration.include_tests,
         artifact_sha256: matching_prior
-            .and_then(PriorRemote::tarball_sha256)
+            .map(PriorRemote::artifact_sha256)
             .map(str::to_owned),
         preferred_fetch_method: matching_prior.map(PriorRemote::fetch_method),
     })
@@ -861,12 +862,16 @@ impl<'a> PriorRemote<'a> {
         }
     }
 
-    fn tarball_sha256(self) -> Option<&'a str> {
+    fn artifact_sha256(self) -> &'a str {
         match self {
-            Self::Package(entry) => entry.tarball_sha256.as_deref(),
-            Self::Reference(entry) => entry.tarball_sha256.as_deref(),
+            Self::Package(entry) => locked_artifact_sha256(&entry.artifact_digest),
+            Self::Reference(entry) => locked_artifact_sha256(&entry.artifact_digest),
         }
     }
+}
+
+fn locked_artifact_sha256(digest: &str) -> &str {
+    digest.strip_prefix("sha256:").unwrap_or(digest)
 }
 
 fn previous_package<'a>(lock: Option<&'a Lockfile>, name: &str) -> Option<&'a LockedPackage> {
@@ -1096,7 +1101,7 @@ mod tests {
             okr_version: "0.1.0".into(),
             generated: "2026-08-11T00:00:00Z".into(),
             snapshot: None,
-            config_hash: "sha256:x".into(),
+            config_digest: "sha256:x".into(),
             environment_digest: "sha256:y".into(),
             packages: Vec::new(),
             references: vec![LockedReference {
@@ -1106,7 +1111,7 @@ mod tests {
                 reference: Some("main".into()),
                 commit: Some("c".repeat(40)),
                 fetch_method: FetchMethod::GitClone,
-                tarball_sha256: Some("d".repeat(64)),
+                artifact_digest: format!("sha256:{}", "d".repeat(64)),
                 tree_digest: format!("sha256:{}", "e".repeat(64)),
                 license: None,
             }],

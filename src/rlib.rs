@@ -360,7 +360,7 @@ mod tests {
             okr_version: "0.1.0".into(),
             generated: "1970-01-01T00:00:00Z".into(),
             snapshot: None,
-            config_hash: "sha256:config".into(),
+            config_digest: "sha256:config".into(),
             environment_digest: "sha256:environment".into(),
             packages: vec![LockedPackage {
                 name: "tinyone".into(),
@@ -370,7 +370,7 @@ mod tests {
                 reference: None,
                 commit: None,
                 fetch_method: FetchMethod::Tarball,
-                tarball_sha256: None,
+                artifact_digest: format!("sha256:{}", "0".repeat(64)),
                 tree_digest: "sha256:tree".into(),
                 license: Some("MIT".into()),
             }],

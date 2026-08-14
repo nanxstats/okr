@@ -31,7 +31,6 @@ struct JsonManifest {
 }
 
 #[derive(Debug, Serialize)]
-#[serde(rename_all = "kebab-case")]
 struct JsonEntry {
     kind: EntryKind,
     name: String,
@@ -42,7 +41,7 @@ struct JsonEntry {
     path: String,
     title: Option<String>,
     tree_digest: String,
-    tarball_sha256: Option<String>,
+    artifact_digest: String,
 }
 
 pub fn render(config: &Config, lock: &Lockfile, vendored: &VendorResult) -> Result<ManifestOutput> {
@@ -64,7 +63,7 @@ pub fn render(config: &Config, lock: &Lockfile, vendored: &VendorResult) -> Resu
             path: format!("{vendor_path}/{}", package.name),
             title,
             tree_digest: package.tree_digest.clone(),
-            tarball_sha256: package.tarball_sha256.clone(),
+            artifact_digest: package.artifact_digest.clone(),
         });
     }
     for reference in &lock.references {
@@ -83,7 +82,7 @@ pub fn render(config: &Config, lock: &Lockfile, vendored: &VendorResult) -> Resu
             path: format!("{vendor_path}/{}", reference.name),
             title,
             tree_digest: reference.tree_digest.clone(),
-            tarball_sha256: reference.tarball_sha256.clone(),
+            artifact_digest: reference.artifact_digest.clone(),
         });
     }
     entries.sort_by(|left, right| (left.kind, &left.name).cmp(&(right.kind, &right.name)));
@@ -137,7 +136,11 @@ pub(crate) fn render_for_verification(
                 .get("Title")
                 .map(|title| title.split_whitespace().collect::<Vec<_>>().join(" ")),
             fetch_method: package.fetch_method,
-            artifact_sha256: package.tarball_sha256.clone().unwrap_or_default(),
+            artifact_sha256: package
+                .artifact_digest
+                .strip_prefix("sha256:")
+                .unwrap_or(&package.artifact_digest)
+                .to_owned(),
             tree: TreeDigest {
                 digest: package.tree_digest.clone(),
                 files: Default::default(),
@@ -153,7 +156,11 @@ pub(crate) fn render_for_verification(
             license: reference.license.clone(),
             title,
             fetch_method: reference.fetch_method,
-            artifact_sha256: reference.tarball_sha256.clone().unwrap_or_default(),
+            artifact_sha256: reference
+                .artifact_digest
+                .strip_prefix("sha256:")
+                .unwrap_or(&reference.artifact_digest)
+                .to_owned(),
             tree: TreeDigest {
                 digest: reference.tree_digest.clone(),
                 files: Default::default(),
@@ -390,7 +397,7 @@ mod tests {
             okr_version: "0.1.0".into(),
             generated: "2026-06-30T00:00:00Z".into(),
             snapshot: Some("2026-06-30".into()),
-            config_hash: format!("sha256:{}", "a".repeat(64)),
+            config_digest: format!("sha256:{}", "a".repeat(64)),
             environment_digest: format!("sha256:{}", "b".repeat(64)),
             packages: vec![LockedPackage {
                 name: "tinyone".into(),
@@ -400,7 +407,7 @@ mod tests {
                 reference: None,
                 commit: None,
                 fetch_method: FetchMethod::Tarball,
-                tarball_sha256: Some("c".repeat(64)),
+                artifact_digest: format!("sha256:{}", "c".repeat(64)),
                 tree_digest: format!("sha256:{}", "d".repeat(64)),
                 license: Some("MIT".into()),
             }],
@@ -411,7 +418,7 @@ mod tests {
                 reference: Some("main".into()),
                 commit: Some("f".repeat(40)),
                 fetch_method: FetchMethod::GitClone,
-                tarball_sha256: Some("1".repeat(64)),
+                artifact_digest: format!("sha256:{}", "1".repeat(64)),
                 tree_digest: format!("sha256:{}", "2".repeat(64)),
                 license: Some("Apache-2.0".into()),
             }],
