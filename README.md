@@ -3,16 +3,12 @@
 [![crates.io](https://img.shields.io/crates/v/okr.svg)](https://crates.io/crates/okr)
 [![CI tests](https://github.com/nanxstats/okr/actions/workflows/ci.yml/badge.svg)](https://github.com/nanxstats/okr/actions/workflows/ci.yml)
 
-> okr is not okr. It's okay-R: a context and provenance layer that makes R
-> projects legible to AI coding agents and reproducible for offline evaluation.
+> Reproducible R source context for coding agents.
 
-Pronounce **okr** "okay-R." The name is a pun: this is an R source context and
-reproducibility tool, not an "objectives and key results" tool.
-
-Installed R libraries are poor context for coding agents. R code is packed into
+Installed R packages are poor context for coding agents. R code is packed into
 binary lazy load databases (`.rdb`/`.rdx`), while compiled package `src/` trees
 are stripped at installation time. `okr` vendors exact source trees into a
-greppable synthetic monorepo and records hashes that can be checked offline.
+greppable synthetic monorepo with records hashes.
 
 ## Install
 
