@@ -1,6 +1,6 @@
 # Changelog
 
-## okr (development version)
+## okr 0.1.2
 
 ### Bug fixes
 
