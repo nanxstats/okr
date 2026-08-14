@@ -22,6 +22,7 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
         .assert()
         .success()
         .stdout(predicate::str::contains("synchronized 1 source entry"))
+        .stdout(predicate::str::contains("sha256:").not())
         .stdout(predicate::str::contains("Rscript was not found"));
     let first_lock = fs::read(project.path().join("okr.lock")).unwrap();
     let first_json = fs::read(project.path().join("deps-src/_manifest.json")).unwrap();
@@ -37,7 +38,14 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
         .arg("sync")
         .assert()
         .success()
-        .stdout(predicate::str::contains("already synchronized; no changes"));
+        .stdout(predicate::str::contains("already synchronized; no changes"))
+        .stdout(predicate::str::contains("sha256:").not());
+
+    okr(project.path(), &cache, &empty_path)
+        .args(["--verbose", "sync"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("environment digest: sha256:"));
 
     fs::remove_dir_all(project.path().join("deps-src")).unwrap();
     fs::remove_file(project.path().join("okr.lock")).unwrap();
@@ -85,7 +93,11 @@ fn coherence_warns_by_default_and_is_fatal_only_when_strict() {
     let tools = project.path().join("tools");
     fs::create_dir(&tools).unwrap();
     let rscript = tools.join("Rscript");
-    fs::write(&rscript, "#!/bin/sh\nprintf '4.5.1\\ntinyone\\t9.9.9\\n'\n").unwrap();
+    fs::write(
+        &rscript,
+        "#!/bin/sh\nprintf '__OKR_RLIB_INSPECTION_V1_BEGIN__\\n4.5.1\\ntinyone\\t9.9.9\\n__OKR_RLIB_INSPECTION_V1_END__\\n'\n",
+    )
+    .unwrap();
     fs::set_permissions(&rscript, fs::Permissions::from_mode(0o755)).unwrap();
     write_cran_config(project.path());
 

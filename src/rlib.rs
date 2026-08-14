@@ -9,11 +9,18 @@ use xshell::{Shell, cmd};
 
 use crate::lock::Lockfile;
 
+const OUTPUT_BEGIN: &str = "__OKR_RLIB_INSPECTION_V1_BEGIN__";
+const OUTPUT_END: &str = "__OKR_RLIB_INSPECTION_V1_END__";
+
 const INSPECTION_SCRIPT: &str = r#"
-cat(paste(R.version$major, R.version$minor, sep = "."), "\n", sep = "")
-packages <- installed.packages()[, c("Package", "Version"), drop = FALSE]
-write.table(packages, stdout(), sep = "\t", row.names = FALSE,
-            col.names = FALSE, quote = FALSE)
+base::cat("\n__OKR_RLIB_INSPECTION_V1_BEGIN__\n")
+base::cat(base::paste(base::R.version$major, base::R.version$minor, sep = "."),
+          "\n", sep = "")
+packages <- utils::installed.packages(lib.loc = base::.libPaths(), noCache = TRUE)
+packages <- packages[, base::c("Package", "Version"), drop = FALSE]
+utils::write.table(packages, base::stdout(), sep = "\t", row.names = FALSE,
+                   col.names = FALSE, quote = FALSE)
+base::cat("__OKR_RLIB_INSPECTION_V1_END__\n")
 "#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,20 +69,52 @@ impl CoherenceReport {
 
 #[must_use]
 pub fn inspect() -> Inspection {
+    let Ok(working_directory) = env::current_dir() else {
+        return Inspection::Unavailable {
+            reason: "could not determine the R project directory".into(),
+        };
+    };
+    inspect_in(&working_directory)
+}
+
+#[must_use]
+pub fn inspect_in(working_directory: &Path) -> Inspection {
     let Some(path) = find_on_path("Rscript") else {
         return Inspection::Absent;
     };
-    inspect_executable(&path)
+    inspect_executable_in(&path, working_directory)
 }
 
 #[must_use]
 pub fn inspect_executable(executable: &Path) -> Inspection {
+    let Ok(working_directory) = env::current_dir() else {
+        return Inspection::Unavailable {
+            reason: "could not determine the R project directory".into(),
+        };
+    };
+    inspect_executable_in(executable, &working_directory)
+}
+
+fn inspect_executable_in(executable: &Path, working_directory: &Path) -> Inspection {
+    let executable = if executable.is_absolute() {
+        executable.to_owned()
+    } else {
+        let Ok(current_directory) = env::current_dir() else {
+            return Inspection::Unavailable {
+                reason: "could not resolve the Rscript path".into(),
+            };
+        };
+        current_directory.join(executable)
+    };
     let Ok(shell) = Shell::new() else {
         return Inspection::Unavailable {
             reason: "could not prepare Rscript command".into(),
         };
     };
-    let output = match cmd!(shell, "{executable} --vanilla -e {INSPECTION_SCRIPT}")
+    shell.change_dir(working_directory);
+    // Normal R startup is intentional: site, user, and project startup files
+    // can all affect `.libPaths()`, which is the state this diagnostic checks.
+    let output = match cmd!(shell, "{executable} -e {INSPECTION_SCRIPT}")
         .quiet()
         .read()
     {
@@ -139,7 +178,13 @@ pub fn check_coherence(lock: &Lockfile, inspection: &Inspection) -> CoherenceRep
 }
 
 fn parse_inspection(output: &str) -> std::result::Result<Inspection, String> {
-    let mut lines = output.lines();
+    // Startup files may write informational text. Only parse our framed output.
+    let mut lines = output
+        .lines()
+        .skip_while(|line| line.trim() != OUTPUT_BEGIN);
+    if lines.next().is_none() {
+        return Err("Rscript inspection returned no output marker".to_owned());
+    }
     let version = lines
         .next()
         .map(str::trim)
@@ -147,6 +192,12 @@ fn parse_inspection(output: &str) -> std::result::Result<Inspection, String> {
         .ok_or_else(|| "Rscript inspection returned no R version".to_owned())?;
     let mut packages = BTreeMap::new();
     for (index, line) in lines.enumerate() {
+        if line.trim() == OUTPUT_END {
+            return Ok(Inspection::Available {
+                r_version: version.to_owned(),
+                packages,
+            });
+        }
         if line.trim().is_empty() {
             continue;
         }
@@ -162,12 +213,14 @@ fn parse_inspection(output: &str) -> std::result::Result<Inspection, String> {
                 index + 2
             ));
         }
-        packages.insert(name.to_owned(), package_version.to_owned());
+        // installed.packages() can report the same package from more than one
+        // library. The first occurrence follows `.libPaths()` precedence and
+        // is the version R will normally load.
+        packages
+            .entry(name.to_owned())
+            .or_insert_with(|| package_version.to_owned());
     }
-    Ok(Inspection::Available {
-        r_version: version.to_owned(),
-        packages,
-    })
+    Err("Rscript inspection returned no closing output marker".to_owned())
 }
 
 fn find_on_path(program: &str) -> Option<PathBuf> {
@@ -203,13 +256,17 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        CoherenceStatus, Inspection, check_coherence, inspect_executable, parse_inspection,
+        CoherenceStatus, Inspection, check_coherence, inspect_executable, inspect_executable_in,
+        parse_inspection,
     };
     use crate::lock::{FetchMethod, LockedPackage, Lockfile};
 
     #[test]
     fn parses_read_only_rscript_output() {
-        let parsed = parse_inspection("4.5.1\nbase\t4.5.1\ntinyone\t1.0.0\n").unwrap();
+        let parsed = parse_inspection(
+            "startup message\n__OKR_RLIB_INSPECTION_V1_BEGIN__\n4.5.1\nbase\t4.5.1\ntinyone\t1.0.0\ntinyone\t2.0.0\n__OKR_RLIB_INSPECTION_V1_END__\nshutdown message\n",
+        )
+        .unwrap();
         assert_eq!(
             parsed,
             Inspection::Available {
@@ -221,7 +278,13 @@ mod tests {
             }
         );
         assert!(parse_inspection("").is_err());
-        assert!(parse_inspection("4.5.1\nmalformed\n").is_err());
+        assert!(
+            parse_inspection(
+                "__OKR_RLIB_INSPECTION_V1_BEGIN__\n4.5.1\nmalformed\n__OKR_RLIB_INSPECTION_V1_END__\n"
+            )
+            .is_err()
+        );
+        assert!(parse_inspection("__OKR_RLIB_INSPECTION_V1_BEGIN__\n4.5.1\n").is_err());
     }
 
     #[cfg(unix)]
@@ -233,7 +296,7 @@ mod tests {
         let executable = directory.path().join("Rscript");
         fs::write(
             &executable,
-            "#!/bin/sh\nprintf '4.5.1\\ntinyone\\t9.9.9\\n'\n",
+            "#!/bin/sh\ncase \" $* \" in *\" --vanilla \"*) exit 9;; esac\nprintf 'startup output\\n__OKR_RLIB_INSPECTION_V1_BEGIN__\\n4.5.1\\ntinyone\\t9.9.9\\n__OKR_RLIB_INSPECTION_V1_END__\\n'\n",
         )
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
@@ -245,6 +308,28 @@ mod tests {
             }
         );
         assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fake_rscript_runs_from_the_project_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir().unwrap();
+        let project = tempdir().unwrap();
+        fs::write(project.path().join("project-startup"), "").unwrap();
+        let executable = directory.path().join("Rscript");
+        fs::write(
+            &executable,
+            "#!/bin/sh\ntest -f project-startup || exit 9\nprintf '__OKR_RLIB_INSPECTION_V1_BEGIN__\\n4.5.1\\ntinyone\\t1.0.0\\n__OKR_RLIB_INSPECTION_V1_END__\\n'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(matches!(
+            inspect_executable_in(&executable, project.path()),
+            Inspection::Available { .. }
+        ));
     }
 
     #[test]
