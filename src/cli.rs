@@ -14,10 +14,11 @@ use crate::fetch::{Cache, Fetcher};
 use crate::hosttools::HostTools;
 use crate::lock::{Lockfile, VerificationReport, config_hash, verify_vendor};
 use crate::manifest::{update_agents_file, update_gitignore, write_manifests};
-use crate::resolve::{TieredGithubApi, resolve};
+use crate::progress::SyncProgress;
+use crate::resolve::{TieredGithubApi, resolve_with_progress};
 use crate::rlib::{CoherenceReport, CoherenceStatus, Inspection, check_coherence};
 use crate::spec::RemoteSpec;
-use crate::vendor::vendor;
+use crate::vendor::vendor_with_progress;
 use crate::{Error, Result};
 
 #[derive(Debug, Parser)]
@@ -544,15 +545,27 @@ fn run_sync(
     let fresh_previous = previous
         .as_ref()
         .filter(|lock| lock.config_hash == expected_config_hash);
+    let entry_count = config.declared_entries()?.len();
+    let progress = SyncProgress::new(entry_count, quiet, verbose);
 
     if let Some(lock) = fresh_previous
         && lock.okr_version == env!("CARGO_PKG_VERSION")
-        && verify_vendor(&project_directory, &config, lock).is_clean()
+        && {
+            progress.set_phase("Checking project state...");
+            let verification_progress = progress.entry("Verifying", "vendor tree");
+            let clean = verify_vendor(&project_directory, &config, lock).is_clean();
+            verification_progress.finish();
+            clean
+        }
         && manifests_exist(&project_directory, &config)
     {
         update_agents_file(&project_directory, &config)?;
         update_gitignore(&project_directory, &config)?;
+        progress.set_phase("Checking installed R library...");
+        let inspection_progress = progress.entry("Inspecting", "R library");
         let coherence = check_coherence(lock, &crate::rlib::inspect_in(&project_directory));
+        inspection_progress.finish();
+        progress.finish();
         emit_coherence(&config, lock, &coherence, quiet);
         if (args.strict || config.project.strict) && coherence.has_mismatches() {
             return Err(Error::Verification(format!(
@@ -570,16 +583,38 @@ fn run_sync(
     }
 
     let cache = Cache::from_environment()?;
-    let fetcher = Fetcher::new(cache, args.offline)?;
+    let fetcher = Fetcher::new(cache, args.offline)?.with_progress(progress.clone());
     let tools = HostTools::new();
     let github = TieredGithubApi::new(&tools)?;
-    let resolution = resolve(&config, &fetcher, &tools, &github, fresh_previous)?;
-    let vendored = vendor(&project_directory, &config, &resolution, &fetcher, &tools)?;
+    let resolution = resolve_with_progress(
+        &config,
+        &fetcher,
+        &tools,
+        &github,
+        fresh_previous,
+        &progress,
+    )?;
+    let vendored = vendor_with_progress(
+        &project_directory,
+        &config,
+        &resolution,
+        &fetcher,
+        &tools,
+        &progress,
+    )?;
+    progress.set_phase("Writing lockfile...");
     let lock = Lockfile::build(&config, &resolution, &vendored)?;
     lock.write(&lock_path)?;
+    progress.advance("Wrote lockfile");
+    progress.set_phase("Writing manifests...");
     write_manifests(&config, &lock, &vendored)?;
     update_agents_file(&project_directory, &config)?;
     update_gitignore(&project_directory, &config)?;
+    progress.advance("Wrote manifests");
+    progress.set_phase("Checking installed R library...");
+    let coherence = check_coherence(&lock, &crate::rlib::inspect_in(&project_directory));
+    progress.advance("Checked installed R library");
+    progress.finish();
 
     if !quiet {
         for warning in &vendored.warnings {
@@ -606,7 +641,6 @@ fn run_sync(
         }
     }
 
-    let coherence = check_coherence(&lock, &crate::rlib::inspect_in(&project_directory));
     emit_coherence(
         &config,
         &lock,
