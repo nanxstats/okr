@@ -1,0 +1,80 @@
+[project]
+site_name = "okr"
+site_description = "Reproducible R source context for coding agents"
+site_author = "Nan Xiao"
+site_url = "https://nanx.me/okr/"
+repo_url = "https://github.com/nanxstats/okr"
+repo_name = "nanxstats/okr"
+edit_uri = "edit/main/docs/"
+copyright = """
+Copyright &copy; 2026 okr authors
+"""
+
+nav = [
+  { "Home" = "index.md" },
+  { "Guide" = [
+    { "Installation" = "guide/install.md" },
+    { "Quick start" = "guide/quickstart.md" },
+    { "Configuration" = "guide/configuration.md" },
+    { "Source declarations" = "guide/sources.md" },
+    { "Offline and CI" = "guide/offline-ci.md" },
+    { "CLI reference" = "guide/cli.md" },
+  ] },
+  { "Concepts" = [
+    { "Context model" = "design/model.md" },
+    { "Resolution and acquisition" = "design/resolution.md" },
+    { "Integrity and reproducibility" = "design/integrity.md" },
+    { "Agent integration" = "design/agent-integration.md" },
+  ] },
+]
+
+extra_css = ["stylesheets/extra.css"]
+
+# ----------------------------------------------------------------------------
+# Section for configuring theme options
+# ----------------------------------------------------------------------------
+[project.theme]
+language = "en"
+font = false
+
+features = [
+  "announce.dismiss",
+  "content.action.edit",
+  "content.action.view",
+  "content.code.annotate",
+  "content.code.copy",
+  "content.code.select",
+  "content.footnote.tooltips",
+  "content.tabs.link",
+  "content.tooltips",
+  "header.autohide",
+  #"navigation.expand",
+  "navigation.footer",
+  "navigation.indexes",
+  "navigation.instant",
+  "navigation.instant.prefetch",
+  #"navigation.instant.progress",
+  "navigation.path",
+  #"navigation.prune",
+  "navigation.sections",
+  #"navigation.tabs",
+  #"navigation.tabs.sticky",
+  "navigation.top",
+  "navigation.tracking",
+  "search.highlight",
+  #"toc.follow",
+  #"toc.integrate",
+]
+
+[[project.theme.palette]]
+scheme = "default"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to dark mode"
+
+[[project.theme.palette]]
+scheme = "slate"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to light mode"
+
+[project.theme.icon]
+repo = "fontawesome/brands/github"
