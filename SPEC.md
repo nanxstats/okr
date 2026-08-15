@@ -475,7 +475,6 @@ harness owns tasks, agents, and grading.
   - `zstd` (0.2)
   - `assert_cmd` (dev-dependencies)
   - `predicates` (dev-dependencies)
-  - `proptest` (dev-dependencies)
 - **Structure:** thin `main.rs`; library crate with modules `config`, `spec`
   (Remotes-grammar parser), `resolve`, `fetch` (tiered strategy + cache),
   `vendor`, `digest`, `lock`, `manifest`, `rlib` (read-only R library

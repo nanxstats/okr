@@ -8,6 +8,11 @@
   `sha256:<hex>` values: `config-digest`, `environment-digest`, `artifact-digest`,
   and `tree-digest` in TOML, with snake case equivalents in JSON (#30).
 
+### Dependencies
+
+- Remove the redundant `proptest` development dependency and disable unused
+  `insta` JSON and redaction features (#32).
+
 ## okr 0.1.2
 
 ### Bug fixes

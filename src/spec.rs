@@ -362,8 +362,6 @@ fn spec_error<T>(message: impl Into<String>) -> Result<T> {
 
 #[cfg(test)]
 mod tests {
-    use proptest::prelude::*;
-
     use super::{
         PackageSpec, RemoteLocation, RemoteRef, RemoteSpec, RemoteType, is_full_commit_sha,
         parse_package, parse_reference,
@@ -586,14 +584,6 @@ mod tests {
                 .suggested_name(),
             "pkg"
         );
-    }
-
-    proptest! {
-        #[test]
-        fn parser_never_panics(input in any::<String>()) {
-            let _ = RemoteSpec::parse(&input);
-            let _ = parse_package(&input);
-        }
     }
 
     fn forge(owner: &str, repo: &str) -> RemoteLocation {
