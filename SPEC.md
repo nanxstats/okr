@@ -1,39 +1,40 @@
 # okr design spec
 
-> okr is not okr. It's okay-R: a context and provenance layer that makes R
-> projects legible to AI coding agents and reproducible for offline evaluation.
+okr is a context and provenance layer that makes R projects legible to AI coding
+agents and reproducible for offline evaluation.
 
 ## 1. Problem statement
 
-An installed R library is opaque to AI coding agents. R source in installed
-packages is stored in binary lazy-load databases (`.rdb`/`.rdx`), and compiled
-`src/` code is stripped at install time. An agent pointed at `.libPaths()` can
-read `DESCRIPTION` and `NAMESPACE` and essentially nothing else. This makes R
-uniquely hostile to grep/glob-driven agent workflows, in contrast to Python
-(plain `.py` in site-packages) and Rust (`cargo vendor`).
+An installed R library is not transparent to AI coding agents. R source code in
+installed packages is stored in binary databases (`.rdb`/`.rdx`), and compiled
+code from `src/` is not bundled at install time.
+An AI coding agent pointed at `.libPaths()` can read `DESCRIPTION` and
+`NAMESPACE` and essentially nothing else without launching R.
+This makes R packages less friendly to grep-driven coding agent workflows,
+in contrast to Python (plaintext `.py` in `site-packages`) and Rust (`cargo vendor`).
 
-Separately, AI model evaluation on R coding tasks requires hermetic, offline,
-verifiable environments: pinned source trees and a digest that eval harnesses
-can assert against, so that models cannot cheat via network access and so
-that runs are reproducible and auditable.
+Separately, AI model evaluation on R coding tasks often require isolated,
+offline, and verifiable environments: pinned source trees and a digest that
+eval harnesses can assert against, so that models cannot cheat via network
+access and so that runs are reproducible and auditable.
 
-`okr` solves both with one mechanism: a **vendored source tree** of a
-project's R dependencies and reference repositories (a "synthetic monorepo"),
-driven by a TOML config, recorded in a lockfile, and verifiable by hash.
+`okr` solves both issues with one simple idea: a **vendored source tree** of
+a project's R dependencies and reference repositories (a "synthetic monorepo"),
+driven by a TOML config, recorded in a lockfile, and verifiable by digest.
 
 ## 2. Positioning
 
-`okr` retrieves, organizes, and attests source context. It **never installs
-anything**: not R, not packages, and never mutates the user's toolchain or
-library. Installation is a solved problem owned by dedicated tools; okr is
-designed to sit beside them:
+`okr` retrieves, organizes, and attests source context.
+It **never installs anything**: not R, not packages, and never mutates the
+user's toolchain or R library. Installation is a solved problem owned by
+dedicated tools; okr is designed to sit beside them:
 
 | Concern | Owner |
 |---|---|
 | R toolchain installation | `rig` |
 | Package installation & dependency resolution | `pak` / `renv` / `rv` / `install.packages()` |
-| Version pinning across time | Posit Package Manager dated snapshots |
-| System-requirement discovery | `renv::sysreqs()` / `pak::pkg_sysreqs()` |
+| Version pinning across time | Posit (Public) Package Manager dated snapshots |
+| System requirement discovery | `renv::sysreqs()` / `pak::pkg_sysreqs()` |
 | Container-image construction | `renv` + Docker / other container tooling |
 | Source legibility, provenance, verification | **okr** |
 
@@ -46,7 +47,7 @@ snapshot, but executing it is the user's (or their package manager's) job.
 1. Vendor exact-version source trees of declared R packages and arbitrary
    reference git repositories into the project.
 2. Accept the de facto standard R `Remotes` syntax for declaring sources.
-3. Guarantee **version--source coherence** between the vendored tree and the
+3. Guarantee **version source coherence** between the vendored tree and the
    declared/locked versions; *diagnose* (not enforce, by default) coherence
    with the user's installed library.
 4. Produce a compact lockfile with aggregate content digests sufficient for
@@ -70,8 +71,8 @@ snapshot, but executing it is the user's (or their package manager's) job.
 - **No credential management.** GitHub auth is delegated to `gh` or
   `GITHUB_TOKEN`; git auth is delegated to the user's git configuration.
 - **No multi-language support.** R's opacity is the reason okr exists.
-- **No renv/rv interop or lockfile conversion.**
-- **No system-requirement discovery or Dockerfile generation.** These describe
+- **No renv/rv interoperability or lockfile conversion.**
+- **No system requirement discovery or Dockerfile generation.** These describe
   the installed runtime environment, not source context. Use
   `renv::sysreqs()` or `pak::pkg_sysreqs()` for OS packages and use renv plus
   the chosen container tooling to construct images. okr's container-facing
@@ -104,7 +105,7 @@ snapshot, but executing it is the user's (or their package manager's) job.
 - **Bundle** - a deterministic archive of config + lock + vendor tree +
   cached artifacts for air-gapped environments.
 
-## 6. CLI surface
+## 6. CLI design
 
 ```
 okr init [--profile <name>] [--force]
@@ -117,7 +118,7 @@ okr bundle [-o <path>] [--include-cache]      # milestone 0.2
 Global flags: --config <path>  --quiet  --verbose  --json (where noted)
 ```
 
-### Command semantics
+### Subcommands
 
 **`init`** - Write `okr.toml` (from a profile template if given). For the
 default template, probe the PPM `PACKAGES.gz` index from the current UTC date
@@ -131,7 +132,7 @@ exact `major.minor.patch` version as `project.r-version`; omit the optional
 field when R is absent or cannot be inspected. Refuses to overwrite without
 `--force`. Offers to append the vendor path to `.gitignore` (see §12).
 
-**`add`** - Parse each `<spec>` per the grammar in §7 and insert it into
+**`add`** - Parse each `<spec>` per the grammar in §7 and insert it under
 `[packages]` (or `[references]` with `--reference`), preserving user comments
 and formatting (`toml_edit`). Does not run sync.
 
@@ -197,7 +198,7 @@ ref         := tag | branch | commit SHA | "*release"   (*release: GitHub only)
 
 | Spec | Meaning |
 |---|---|
-| `pharmaverse/admiral@v1.3.0` | GitHub (default type), tag |
+| `pharmaverse/admiral@v1.5.0` | GitHub (default type), tag |
 | `github::tidyverse/ggplot2` | GitHub, default branch (warns; SHA is locked) |
 | `r-lib/testthat@*release` | GitHub, latest release (resolved then frozen) |
 | `gitlab::jimhester/covr@abc123` | gitlab.com, commit |
@@ -216,7 +217,7 @@ milestone or alternative:
 | `owner/repo#123` (PR refs) | **Planned (0.2)** |
 | `svn::...` | **Rejected permanently** - use `git::` or `url::` |
 
-In `[packages]`, a plain version string or `"*"` means CRAN-from-snapshot;
+In `[packages]`, a plain version string or `"*"` means CRAN from snapshot;
 any string containing `/` or `::` is parsed as a remote spec (R package
 versions never contain `/`, so this is unambiguous).
 
@@ -230,7 +231,7 @@ Resolution is a lookup, never a solver:
   superseded versions). If the index repeats a package at different versions,
   choose the greatest version using R's numeric package-version ordering.
   Tarball: `{...}/src/contrib/{name}_{version}.tar.gz`.
-- **Git refs &rarr; commit SHA:** `git ls-remote <url> <ref>` - universal across
+- **Git refs -> commit SHA:** `git ls-remote <url> <ref>` - universal across
   hosts and protocols, uses the user's existing SSH keys and credential
   helpers, has no API rate limits. A spec pinned to a full SHA skips
   resolution. `@*release` (GitHub only) resolves via the tier below.
@@ -245,8 +246,8 @@ Resolution is a lookup, never a solver:
 
 | Source situation | Method |
 |---|---|
-| CRAN / `url::` | HTTPS tarball &rarr; cache |
-| Public repo on a recognized forge (github.com, gitlab.com, bitbucket.org, codeberg.org) | Forge archive tarball at the resolved SHA &rarr; cache |
+| CRAN / `url::` | HTTPS tarball -> cache |
+| Public repo on a recognized forge (github.com, gitlab.com, bitbucket.org, codeberg.org) | Forge archive tarball at the resolved SHA -> cache |
 | Private GitHub | `gh api repos/{o}/{r}/tarball/{sha}` when `gh` available |
 | Anything else (`git::`, GHE, self-hosted, tarball fetch failed) | Shallow `git clone` at the ref (`--depth 1`, `core.autocrlf=false`), verify `HEAD` == resolved SHA, strip `.git` |
 
@@ -275,8 +276,7 @@ still not a version solver.
    - **References:** exclude only VCS metadata (`.git*`) by default:
      reference repos are not R packages and R-motivated pruning must not apply.
    - User `exclude` globs merge on top in both cases.
-4. Write to `deps-src/{name}/`, replacing atomically (sibling temp dir,
-   rename).
+4. Write to `deps-src/{name}/`, replacing atomically (sibling temp dir, rename).
 5. Compute the **tree digest**: sha256 over the sorted list of
    `(relative-path, file-sha256)` pairs, newline-joined, `/`-normalized
    paths. Byte-stable across platforms.
@@ -334,9 +334,9 @@ license = "LGPL-2.1"
 
 [[package]]
 name = "admiral"
-version = "1.3.0"
+version = "1.5.0"
 source = "github::pharmaverse/admiral"
-ref = "v1.3.0"
+ref = "v1.5.0"
 commit = "9f2c..."
 fetch-method = "forge-tarball"       # tarball | forge-tarball | gh | git-clone
 artifact-digest = "sha256:..."
@@ -381,7 +381,7 @@ collision-resistant aggregate and would make lock and manifest size grow with
 the number and path length of source files. Consequently, verification reports
 the entry whose tree changed rather than diagnosing an individual file.
 
-## 12. Agent affordances
+## 12. Agent integration
 
 - `deps-src/_manifest.md` - compact tables, packages and references listed
   separately: name, version (or commit), source, license, path, one-line
@@ -428,7 +428,7 @@ agents-file = true                   # maintain a marker-delimited block in AGEN
 [packages]                           # name = version | "*" | remote spec (§7) | table
 rpact = "*"                          # CRAN, version from snapshot
 gsDesign = "3.6.4"                   # CRAN, explicit pin (snapshot or archive)
-admiral = "pharmaverse/admiral@v1.3.0"
+admiral = "pharmaverse/admiral@v1.5.0"
 covr = "gitlab::jimhester/covr@abc123"
 simlib = { git = "git@ghe.corp.example:stats/simlib.git", ref = "v2.1" }
 internalpkg = { url = "https://example.com/internalpkg_0.2.1.tar.gz", sha256 = "..." }

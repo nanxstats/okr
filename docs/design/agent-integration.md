@@ -39,7 +39,7 @@ integrity fields. Its top-level shape is:
     {
       "kind": "package",
       "name": "admiral",
-      "version": "1.3.0",
+      "version": "1.5.0",
       "commit": "...",
       "source": "github::pharmaverse/admiral",
       "license": "Apache License (>= 2)",

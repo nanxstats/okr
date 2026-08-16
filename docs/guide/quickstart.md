@@ -13,7 +13,7 @@ okr init
 ```
 
 `init` searches backward from the current UTC date for the latest available
-dated Posit Package Manager CRAN snapshot. It writes that exact date to
+dated Posit (Public) Package Manager CRAN snapshot. It writes that exact date to
 `okr.toml` and caches the successful package index for the first sync. It also
 adds the default `deps-src/` path to `.gitignore`. If `Rscript` is available,
 it records the exact detected R version as an advisory `project.r-version`;
@@ -27,7 +27,7 @@ Add a CRAN package and a package hosted on GitHub:
 
 ```console
 okr add ggsci
-okr add pharmaverse/admiral@v1.3.0
+okr add pharmaverse/admiral@v1.5.0
 ```
 
 Bare names become `"*"` entries under `[packages]`, resolved from the configured

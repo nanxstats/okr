@@ -448,7 +448,7 @@ agents-file = true
 [packages]
 rpact = "*"
 gsDesign = "3.6.4"
-admiral = "pharmaverse/admiral@v1.3.0"
+admiral = "pharmaverse/admiral@v1.5.0"
 simlib = {{ git = "git@example.test:stats/simlib.git", ref = "v2.1" }}
 internalpkg = {{ url = "https://example.test/internalpkg_0.2.1.tar.gz", sha256 = "{SHA256}" }}
 rtables = {{ spec = "insightsengineering/rtables@v0.6.13", exclude = ["vignettes/**"], include-tests = false }}
