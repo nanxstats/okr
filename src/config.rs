@@ -49,6 +49,9 @@ impl Config {
     pub fn validate(&self) -> Result<()> {
         validate_vendor_path(&self.vendor.path)?;
         validate_globs(&self.vendor.exclude, "vendor.exclude")?;
+        if let Some(r_version) = &self.project.r_version {
+            validate_r_version(r_version)?;
+        }
         if let Some(snapshot) = &self.project.snapshot {
             validate_snapshot(snapshot)?;
         }
@@ -103,7 +106,6 @@ impl Config {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct ProjectConfig {
-    pub name: Option<String>,
     pub r_version: Option<String>,
     pub snapshot: Option<String>,
     pub strict: bool,
@@ -392,6 +394,21 @@ fn validate_sha256(value: &str) -> std::result::Result<(), String> {
     }
 }
 
+fn validate_r_version(version: &str) -> Result<()> {
+    let mut components = version.split('.');
+    if components.clone().count() == 3
+        && components.all(|component| {
+            !component.is_empty() && component.bytes().all(|byte| byte.is_ascii_digit())
+        })
+    {
+        Ok(())
+    } else {
+        Err(Error::Config(format!(
+            "project.r-version must use R's exact `major.minor.patch` form (for example `4.5.1`), got `{version}`"
+        )))
+    }
+}
+
 fn config_entry_error<T>(kind: EntryKind, name: &str, message: &str) -> Result<T> {
     Err(Error::Config(format!(
         "[{}].{name}: {message}",
@@ -414,7 +431,6 @@ mod tests {
         let input = format!(
             r#"
 [project]
-name = "trial-design-bench"
 r-version = "4.5.1"
 snapshot = "2026-06-30"
 strict = false
@@ -466,6 +482,7 @@ protocol-templates = {{ git = "https://codeberg.org/org/protocols.git", ref = "m
         for input in [
             "typo = true",
             "[project]\ntyop = true",
+            "[project]\nname = \"unused-label\"",
             "[vendor]\ninclude-test = true",
             "[manifest]\nagent-file = true",
         ] {
@@ -487,6 +504,18 @@ protocol-templates = {{ git = "https://codeberg.org/org/protocols.git", ref = "m
                 "`{input}` unexpectedly parsed"
             );
         }
+    }
+
+    #[test]
+    fn r_version_is_an_exact_runtime_version() {
+        for version in ["4", "4.5", "4.5.1 Patched", "latest", ""] {
+            let error =
+                Config::parse(&format!("[project]\nr-version = \"{version}\"")).unwrap_err();
+            assert!(error.to_string().contains("major.minor.patch"), "{error}");
+        }
+
+        let parsed = Config::parse("[project]\nr-version = \"4.5.1\"").unwrap();
+        assert_eq!(parsed.project.r_version.as_deref(), Some("4.5.1"));
     }
 
     #[test]

@@ -11,6 +11,15 @@ use crate::lock::Lockfile;
 
 const OUTPUT_BEGIN: &str = "__OKR_RLIB_INSPECTION_V1_BEGIN__";
 const OUTPUT_END: &str = "__OKR_RLIB_INSPECTION_V1_END__";
+const VERSION_OUTPUT_BEGIN: &str = "__OKR_R_VERSION_V1_BEGIN__";
+const VERSION_OUTPUT_END: &str = "__OKR_R_VERSION_V1_END__";
+
+const VERSION_SCRIPT: &str = r#"
+base::cat("\n__OKR_R_VERSION_V1_BEGIN__\n")
+base::cat(base::paste(base::R.version$major, base::R.version$minor, sep = "."),
+          "\n", sep = "")
+base::cat("__OKR_R_VERSION_V1_END__\n")
+"#;
 
 const INSPECTION_SCRIPT: &str = r#"
 base::cat("\n__OKR_RLIB_INSPECTION_V1_BEGIN__\n")
@@ -83,6 +92,35 @@ pub fn inspect_in(working_directory: &Path) -> Inspection {
         return Inspection::Absent;
     };
     inspect_executable_in(&path, working_directory)
+}
+
+/// Detect the exact R version exposed to a project without changing R state.
+#[must_use]
+pub fn detect_r_version_in(working_directory: &Path) -> Option<String> {
+    let executable = find_on_path("Rscript")?;
+    detect_r_version_executable_in(&executable, working_directory).ok()
+}
+
+fn detect_r_version_executable_in(
+    executable: &Path,
+    working_directory: &Path,
+) -> std::result::Result<String, String> {
+    let executable = if executable.is_absolute() {
+        executable.to_owned()
+    } else {
+        env::current_dir()
+            .map_err(|error| format!("could not resolve the Rscript path: {error}"))?
+            .join(executable)
+    };
+    let shell = Shell::new().map_err(|error| format!("could not prepare Rscript: {error}"))?;
+    shell.change_dir(working_directory);
+    // Match later project inspection: normal R startup is intentional, and
+    // framing keeps startup messages out of the version value.
+    let output = cmd!(shell, "{executable} -e {VERSION_SCRIPT}")
+        .quiet()
+        .read()
+        .map_err(|error| format!("Rscript version detection failed: {error}"))?;
+    parse_r_version(&output)
 }
 
 #[must_use]
@@ -223,6 +261,25 @@ fn parse_inspection(output: &str) -> std::result::Result<Inspection, String> {
     Err("Rscript inspection returned no closing output marker".to_owned())
 }
 
+fn parse_r_version(output: &str) -> std::result::Result<String, String> {
+    let mut lines = output
+        .lines()
+        .skip_while(|line| line.trim() != VERSION_OUTPUT_BEGIN);
+    if lines.next().is_none() {
+        return Err("Rscript version detection returned no output marker".to_owned());
+    }
+    let version = lines
+        .next()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .ok_or_else(|| "Rscript version detection returned no R version".to_owned())?;
+    if lines.any(|line| line.trim() == VERSION_OUTPUT_END) {
+        Ok(version.to_owned())
+    } else {
+        Err("Rscript version detection returned no closing output marker".to_owned())
+    }
+}
+
 fn find_on_path(program: &str) -> Option<PathBuf> {
     let path = env::var_os("PATH")?;
     env::split_paths(&path)
@@ -256,8 +313,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        CoherenceStatus, Inspection, check_coherence, inspect_executable, inspect_executable_in,
-        parse_inspection,
+        CoherenceStatus, Inspection, check_coherence, detect_r_version_executable_in,
+        inspect_executable, inspect_executable_in, parse_inspection, parse_r_version,
     };
     use crate::lock::{FetchMethod, LockedPackage, Lockfile};
 
@@ -285,6 +342,19 @@ mod tests {
             .is_err()
         );
         assert!(parse_inspection("__OKR_RLIB_INSPECTION_V1_BEGIN__\n4.5.1\n").is_err());
+    }
+
+    #[test]
+    fn parses_framed_r_version_output() {
+        assert_eq!(
+            parse_r_version(
+                "startup message\n__OKR_R_VERSION_V1_BEGIN__\n4.5.2\n__OKR_R_VERSION_V1_END__\nshutdown message\n"
+            )
+            .unwrap(),
+            "4.5.2"
+        );
+        assert!(parse_r_version("").is_err());
+        assert!(parse_r_version("__OKR_R_VERSION_V1_BEGIN__\n4.5.2\n").is_err());
     }
 
     #[cfg(unix)]
@@ -330,6 +400,28 @@ mod tests {
             inspect_executable_in(&executable, project.path()),
             Inspection::Available { .. }
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn version_detection_runs_from_the_project_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempdir().unwrap();
+        let project = tempdir().unwrap();
+        fs::write(project.path().join("project-startup"), "").unwrap();
+        let executable = directory.path().join("Rscript");
+        fs::write(
+            &executable,
+            "#!/bin/sh\ntest -f project-startup || exit 9\nprintf 'startup output\\n__OKR_R_VERSION_V1_BEGIN__\\n4.5.2\\n__OKR_R_VERSION_V1_END__\\n'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert_eq!(
+            detect_r_version_executable_in(&executable, project.path()).unwrap(),
+            "4.5.2"
+        );
     }
 
     #[test]
