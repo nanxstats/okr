@@ -150,12 +150,13 @@ pub fn run(cli: Cli) -> Result<()> {
 
 const SNAPSHOT_LOOKBACK_DAYS: i64 = 14;
 
-fn default_config(snapshot: &str) -> String {
+fn default_config(snapshot: &str, r_version: Option<&str>) -> String {
+    let r_version = r_version
+        .map(|version| format!("r-version = \"{version}\"\n"))
+        .unwrap_or_default();
     format!(
         r#"[project]
-# name = "my-r-project"
-# r-version = "4.5.1"      # advisory only
-snapshot = "{snapshot}"    # latest available dated snapshot when initialized
+{r_version}snapshot = "{snapshot}"    # latest available dated snapshot when initialized
 strict = false
 
 [vendor]
@@ -188,13 +189,17 @@ fn run_init(config_path: &Path, args: &InitArgs, quiet: bool) -> Result<()> {
         )));
     }
     let snapshot = discover_default_snapshot()?;
-    let contents = default_config(&snapshot);
+    let project = project_directory(config_path);
+    let r_version = crate::rlib::detect_r_version_in(&project);
+    let contents = default_config(&snapshot, r_version.as_deref());
     let config = Config::parse(&contents)?;
     atomic_write_preserving_permissions(config_path, &contents)?;
-    let project = project_directory(config_path);
     update_gitignore(&project, &config)?;
     if !quiet {
         println!("wrote {}", config_path.display());
+        if let Some(version) = r_version {
+            println!("recorded R {version} in project.r-version");
+        }
         println!(
             "managed /{}/ in {}",
             config.vendor.path.display(),
@@ -1039,9 +1044,15 @@ mod tests {
 
     #[test]
     fn default_config_contains_a_valid_active_snapshot() {
-        let rendered = default_config("2000-02-29");
+        let rendered = default_config("2000-02-29", None);
         let config = Config::parse(&rendered).unwrap();
         assert_eq!(config.project.snapshot.as_deref(), Some("2000-02-29"));
         assert!(!rendered.contains("# snapshot"));
+        assert!(!rendered.contains("name ="));
+        assert!(!rendered.contains("r-version"));
+
+        let rendered = default_config("2000-02-29", Some("4.5.2"));
+        let config = Config::parse(&rendered).unwrap();
+        assert_eq!(config.project.r_version.as_deref(), Some("4.5.2"));
     }
 }

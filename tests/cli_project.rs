@@ -1,6 +1,7 @@
 #![cfg(unix)]
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command as ProcessCommand;
 
@@ -26,6 +27,8 @@ fn init_writes_the_safe_template_and_requires_force_to_replace_it() {
     assert!(template.contains("[references]"));
     assert!(template.contains(&format!("snapshot = \"{snapshot}\"")));
     assert!(!template.contains("# snapshot"));
+    assert!(!template.contains("name ="));
+    assert!(!template.contains("r-version"));
     assert_eq!(
         fs::read_to_string(project.path().join(".gitignore")).unwrap(),
         "/deps-src/\n"
@@ -65,6 +68,45 @@ fn init_writes_the_safe_template_and_requires_force_to_replace_it() {
         .assert()
         .code(2)
         .stderr(predicate::str::contains("milestone 0.2"));
+}
+
+#[test]
+fn init_records_the_detected_project_r_version() {
+    let project = tempdir().unwrap();
+    let cache = project.path().join("cache");
+    let tools = project.path().join("tools");
+    fs::create_dir(&tools).unwrap();
+    let rscript = tools.join("Rscript");
+    fs::write(
+        &rscript,
+        "#!/bin/sh\nprintf 'startup output\\n__OKR_R_VERSION_V1_BEGIN__\\n4.5.2\\n__OKR_R_VERSION_V1_END__\\n'\n",
+    )
+    .unwrap();
+    fs::set_permissions(&rscript, fs::Permissions::from_mode(0o755)).unwrap();
+    let snapshot = seed_current_snapshot(&cache);
+
+    okr(project.path(), &cache, &tools)
+        .arg("init")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "recorded R 4.5.2 in project.r-version",
+        ));
+
+    let contents = fs::read_to_string(project.path().join("okr.toml")).unwrap();
+    let config = okr::config::Config::parse(&contents).unwrap();
+    assert_eq!(config.project.r_version.as_deref(), Some("4.5.2"));
+    assert_eq!(config.project.snapshot.as_deref(), Some(snapshot.as_str()));
+
+    fs::write(&rscript, "#!/bin/sh\nexit 9\n").unwrap();
+    okr(project.path(), &cache, &tools)
+        .args(["init", "--force"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("recorded R").not());
+    let contents = fs::read_to_string(project.path().join("okr.toml")).unwrap();
+    let config = okr::config::Config::parse(&contents).unwrap();
+    assert_eq!(config.project.r_version, None);
 }
 
 #[test]
