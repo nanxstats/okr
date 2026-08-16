@@ -6,7 +6,7 @@
 
 - Remove system requirement discovery and Dockerfile emission from the roadmap.
   Delegate those concerns to renv, pak, and container tooling. Document
-  okr's boundary as composable source context artifacts and verification.
+  okr's boundary as composable source context artifacts and verification (#43).
 
 ## okr 0.1.4
 
