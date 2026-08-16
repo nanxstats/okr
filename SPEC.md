@@ -1,326 +1,448 @@
-# okr design spec
+# okr design specification
 
-okr is a context and provenance layer that makes R projects legible to AI coding
-agents and reproducible for offline evaluation.
+`okr` gives coding agents readable R package sources and records exactly which
+sources they received. It builds a vendored source tree, describes that tree in
+agent-facing manifests, and attests its contents with deterministic digests.
 
-## 1. Problem statement
+## 1. Make installed code readable
 
-An installed R library is not transparent to AI coding agents. R source code in
-installed packages is stored in binary databases (`.rdb`/`.rdx`), and compiled
-code from `src/` is not bundled at install time.
-An AI coding agent pointed at `.libPaths()` can read `DESCRIPTION` and
-`NAMESPACE` and essentially nothing else without launching R.
-This makes R packages less friendly to grep-driven coding agent workflows,
-in contrast to Python (plaintext `.py` in `site-packages`) and Rust (`cargo vendor`).
+An installed R package is designed to run, not to be read. Its R code is stored
+in binary lazy-load databases (`.rdb` and `.rdx`), and source files compiled
+from `src/` are not included in the installed package. A coding agent inspecting
+an R library can usually read `DESCRIPTION` and `NAMESPACE`, but it can't
+inspect the original implementation via regular text search.
 
-Separately, AI model evaluation on R coding tasks often require isolated,
-offline, and verifiable environments: pinned source trees and a digest that
-eval harnesses can assert against, so that models cannot cheat via network
-access and so that runs are reproducible and auditable.
+Model evaluation environments add a second requirement. They need exact source
+trees that can be staged before the network is disabled and checked before an
+eval run starts. A stable digest lets the harness confirm that every run
+received the same inputs and that those inputs did not change.
 
-`okr` solves both issues with one simple idea: a **vendored source tree** of
-a project's R dependencies and reference repositories (a "synthetic monorepo"),
-driven by a TOML config, recorded in a lockfile, and verifiable by digest.
+`okr` addresses both needs with one artifact: a vendored tree containing the
+declared R packages and reference repositories. `okr.toml` declares the desired
+sources, `okr.lock` records the resolved sources and their provenance, and
+`okr verify` checks the resulting bytes.
 
-## 2. Positioning
+## 2. Keep responsibility narrow
 
-`okr` retrieves, organizes, and attests source context.
-It **never installs anything**: not R, not packages, and never mutates the
-user's toolchain or R library. Installation is a solved problem owned by
-dedicated tools; okr is designed to sit beside them:
+`okr` retrieves, organizes, and attests source context. It never installs R,
+installs R packages, or writes to an R library. Those tasks already have
+dedicated tools:
 
-| Concern | Owner |
+| Task | Owner |
 |---|---|
-| R toolchain installation | `rig` |
-| Package installation & dependency resolution | `pak` / `renv` / `rv` / `install.packages()` |
-| Version pinning across time | Posit (Public) Package Manager dated snapshots |
-| System requirement discovery | `renv::sysreqs()` / `pak::pkg_sysreqs()` |
-| Container-image construction | `renv` + Docker / other container tooling |
-| Source legibility, provenance, verification | **okr** |
+| Install R | `rig` |
+| Install packages and resolve dependencies | `pak`, `renv`, `rv`, or `install.packages()` |
+| Provide dated CRAN snapshots | Posit (Public) Package Manager |
+| Discover system requirements | `renv::sysreqs()` or `pak::pkg_sysreqs()` |
+| Construct container images | `renv` and the user's container tooling |
+| Provide readable source context and attest it | `okr` |
 
-okr reads the installed library (when R is present) purely as a diagnostic,
-and its docs show the one-line companion install command against the same
-snapshot, but executing it is the user's (or their package manager's) job.
+When R is available, `okr` may inspect the installed library as a read-only
+diagnostic. It also prints a companion installation command that uses the same
+snapshot. It never runs that command.
 
 ## 3. Goals
 
-1. Vendor exact-version source trees of declared R packages and arbitrary
-   reference git repositories into the project.
-2. Accept the de facto standard R `Remotes` syntax for declaring sources.
-3. Guarantee **version source coherence** between the vendored tree and the
-   declared/locked versions; *diagnose* (not enforce, by default) coherence
-   with the user's installed library.
-4. Produce a compact lockfile with aggregate content digests sufficient for
-   byte-level verification and an environment digest for stamping benchmark
-   runs.
-5. Generate agent-facing manifests so coding agents discover the vendored
-   tree without prompting.
-6. Support fully offline operation from a local cache or bundle.
-7. Work against any git host: public forges, GitHub Enterprise, self-hosted
-   GitLab, Codeberg, bare `git://` remotes, SSH remotes, using the user's
-   existing git/`gh` authentication rather than managing credentials itself.
+1. Vendor the exact source of each declared R package and reference repository.
+2. Accept the familiar subset of the R `Remotes` grammar defined in §7.
+3. Require the vendored package version to match the resolved version.
+   Report differences between that version and the installed R library
+   without making them fatal by default.
+4. Record compact, aggregate content digests that support byte-level
+   verification and provide one environment digest for evaluation runs.
+5. Generate manifests that make the vendored tree easy for coding agents to
+   discover and navigate.
+6. Support offline use from a local cache in 0.1, with portable bundles planned
+   for 0.2.
+7. Work with any Git host supported by the user's `git` installation, including
+   public forges, GitHub Enterprise, self-hosted GitLab, `git://` remotes, and
+   SSH remotes. Reuse the user's existing Git and `gh` authentication instead of
+   storing credentials.
 
-## 4. Non-goals
+## 4. Leave other jobs to other tools
 
-- **No installation of anything.** No R setup, no package installation,
-  no library mutation. okr emits commands and diagnostics only.
-- **No dependency version solver.** CRAN resolution is a metadata lookup
-  against the snapshot's PACKAGES index.
-- **No eval runner.** No task definitions, grading, or agent loops. okr emits
-  machine-readable manifests for harnesses (for example, Inspect) to consume.
-- **No credential management.** GitHub auth is delegated to `gh` or
-  `GITHUB_TOKEN`; git auth is delegated to the user's git configuration.
-- **No multi-language support.** R's opacity is the reason okr exists.
-- **No renv/rv interoperability or lockfile conversion.**
-- **No system requirement discovery or Dockerfile generation.** These describe
-  the installed runtime environment, not source context. Use
-  `renv::sysreqs()` or `pak::pkg_sysreqs()` for OS packages and use renv plus
-  the chosen container tooling to construct images. okr's container-facing
-  contract is its lock, vendored tree, manifests, verification command, and
-  portable bundle.
+- **Keep installation external.** `okr` does not install R or R packages and
+  does not modify an R library.
+- **Resolve by lookup.** CRAN resolution reads the selected snapshot's
+  `PACKAGES` index; it does not solve dependency constraints.
+- **Supply context, not evaluations.** Task definitions, agent loops, and
+  grading belong to the evaluation harness. `okr` supplies machine-readable
+  inputs to that harness.
+- **Reuse existing authentication.** GitHub authentication comes from `gh` or
+  `GITHUB_TOKEN`; Git authentication comes from the user's Git configuration
+  and environment.
+- **Stay focused on R.** `okr` focuses on addressing a property of installed
+  R packages; it is not designed as a language-agnostic source vendoring tool.
+- **Keep package manager lockfiles separate.** No `renv` or `rv` lockfile conversion.
+- **Leave runtime construction external.** System requirements and Dockerfiles
+  describe the runtime rather than the source context.
+  Use `renv::sysreqs()` or `pak::pkg_sysreqs()` for system packages and the
+  user's preferred container tooling for images. The container-facing interface
+  of `okr` is its lockfile, vendor tree, manifests, verification command, and,
+  in 0.2, its portable bundle.
 
-## 5. Core concepts
+## 5. Glossary
 
-- **`okr.toml`** - declarative project config (committed).
-- **`okr.lock`** - resolved versions, refs, URLs, and integrity digests
-  (committed).
-- **Vendor tree** - `deps-src/` by default; one directory per entry.
-- **Package** - an R package, vendored at an exact version; participates in
-  version resolution and library-coherence diagnostics.
-- **Reference** - an arbitrary git repository vendored for agent context (a
-  standards repo, a protocol-template repo, a non-R codebase). No version
-  semantics beyond the pinned commit; no coherence involvement; minimal
-  pruning.
-- **Snapshot** - a dated PPM repository
-  (`https://packagemanager.posit.co/cran/<YYYY-MM-DD>`) used to resolve and
-  fetch CRAN sources. Required iff any CRAN package is declared.
-- **Cache** - content-addressed download cache at `$OKR_CACHE_DIR`
-  (default `~/.cache/okr`), keyed by SHA-256 digest.
-- **Manifest** - `deps-src/_manifest.json` (machine) and
-  `deps-src/_manifest.md` (agent/human). R package names must start with a
-  letter, so `_`-prefixed files cannot collide with package directories.
-- **Profile** - a curated, shippable `okr.toml` template (for example, `tdb`,
-  short for "trial design bench"), selected at `okr init`.
-  Breadth lives in profiles; the tool stays narrow.
-- **Bundle** - a deterministic archive of config + lock + vendor tree +
-  cached artifacts for air-gapped environments.
+- **`okr.toml`** is the committed project configuration.
+- **`okr.lock`** is the committed record of resolved versions, commits, URLs,
+  fetch methods, and integrity digests.
+- **Vendor tree** is the generated source tree, `deps-src/` by default, with one
+  directory per declared entry.
+- **Package** is an R package vendored at one exact version. It participates in
+  source version checks and installed library diagnostics.
+- **Reference** is any other repository included as read-only context:
+  for example, a standards repository, protocol templates, or a non-R codebase.
+  It has no package-version semantics and does not participate in R library
+  diagnostics. Its commit is still pinned.
+- **Snapshot** is a dated PPM repository such as
+  `https://packagemanager.posit.co/cran/2026-06-30`. It is required when, and
+  only when, the configuration contains a CRAN package.
+- **Cache** is the content-addressed artifact cache under `$OKR_CACHE_DIR`, or
+  `~/.cache/okr` by default. Artifacts are keyed by SHA-256.
+- **Manifest** means `deps-src/_manifest.json` and `deps-src/_manifest.md`.
+  R package names begin with a letter, so these underscore-prefixed files
+  cannot collide with package directories.
+- **Profile** is a curated `okr.toml` template selected by `okr init`.
+  Profiles are planned for 0.2.
+- **Bundle** is a deterministic archive containing the configuration, lockfile,
+  vendor tree, and optionally the artifacts needed for offline reconstruction.
+  Bundles are planned for 0.2.
 
-## 6. CLI design
+## 6. Design a small command line
 
-```
-okr init [--profile <name>] [--force]
+The command surface in 0.1 is:
+
+```text
+okr init [--force]
 okr add <spec>... [--reference]
 okr sync [--offline] [--strict]
 okr status [--json]
 okr verify [--json] [--strict]
-okr bundle [-o <path>] [--include-cache]      # milestone 0.2
 
-Global flags: --config <path>  --quiet  --verbose  --json (where noted)
+Shared options: --config <path>  --quiet  --verbose
 ```
 
-### Subcommands
+`--json` is available only on the commands that show it above. Supplying it to
+another command is an error.
 
-**`init`** - Write `okr.toml` (from a profile template if given). For the
-default template, probe the PPM `PACKAGES.gz` index from the current UTC date
-backward through a bounded 14-day window, and write the first available exact
-date as `project.snapshot`. The successful index response is cached for the
-first sync. Connectivity and server failures are fetch errors; only a missing
-snapshot advances to the previous date. Never write the moving `latest` alias,
-because the configured snapshot must remain reproducible. When `Rscript` is
-available on `PATH`, run it read-only from the project directory and record its
-exact `major.minor.patch` version as `project.r-version`; omit the optional
-field when R is absent or cannot be inspected. Refuses to overwrite without
-`--force`. Offers to append the vendor path to `.gitignore` (see §12).
+The 0.2 roadmap adds:
 
-**`add`** - Parse each `<spec>` per the grammar in §7 and insert it under
-`[packages]` (or `[references]` with `--reference`), preserving user comments
-and formatting (`toml_edit`). Does not run sync.
-
-**`sync`** - The convergence command; idempotent. Pipeline:
-
-1. *Resolve.* Determine the exact version/commit and fetch plan for every
-   declared entry (§8).
-2. *Fetch & vendor.* Download or clone (or hit cache), verify, extract,
-   prune, write trees (§9).
-3. *Lock.* Write `okr.lock` (§11).
-4. *Manifest.* Write `_manifest.json` / `_manifest.md`; update the marker
-   block in `AGENTS.md` if enabled (§12).
-5. *Coherence diagnostic.* If R is present, compare installed package
-   versions against vendored versions; **warn** on mismatch, listing the
-   companion install command that would reconcile. With `--strict` (or
-   `project.strict = true`): exit 4 instead (§10).
-
-Re-running `sync` with an up-to-date lock and intact tree is a no-op
-(fast-path via digest comparison).
-
-**`status`** - Report: R presence/version (including an exact advisory
-comparison when `project.r-version` is declared),
-lock freshness (config digest vs lock), vendor-tree integrity spot-check,
-library coherence summary, cache stats, and the copy-paste companion install
-line, for example:
-
+```text
+okr init --profile <name-or-path-or-url> [--force]
+okr bundle [-o <path>] [--include-cache]
 ```
+
+### `init`
+
+`okr init` writes `okr.toml`. For the default template, it looks for a PPM
+snapshot by requesting `PACKAGES.gz` for the current UTC date and then walking
+back at most 14 days. It writes the first available date to
+`project.snapshot` and caches the successful response for the first sync.
+
+Only a response that means "snapshot not found" advances to the preceding
+date. Connectivity failures and server errors are fetch errors.
+`init` never writes the moving `latest` alias because a configuration must
+identify a stable snapshot.
+
+If `Rscript` is on `PATH`, `init` runs it read-only from the project directory
+and records its exact `major.minor.patch` version as `project.r-version`.
+If R is absent or cannot be inspected, it omits this optional field.
+`init` refuses to replace an existing configuration unless `--force` is supplied
+and offers to add the vendor path to `.gitignore` as described in §12.
+
+In 0.2, `--profile` uses a profile template instead of the default template.
+
+### `add`
+
+`okr add` parses every argument with the grammar in §7 and adds it to
+`[packages]`, or to `[references]` when `--reference` is present.
+It uses `toml_edit`, so comments and formatting outside the edit are preserved.
+It does not run `sync`.
+
+### `sync`
+
+`okr sync` makes the generated state agree with `okr.toml`.
+It is idempotent and has five stages:
+
+1. **Resolve.** Freeze every package version and remote ref into an exact
+   source plan (§8).
+2. **Fetch and vendor.** Acquire verified artifacts, extract or clone them,
+   prune them, and atomically replace their vendor directories (§9).
+3. **Lock.** Write `okr.lock` (§11).
+4. **Describe.** Write both manifests and, when enabled, update the managed
+   block in `AGENTS.md` (§12).
+5. **Compare.** If R is available, compare the installed package versions with
+   the vendored versions. Report drift and print the companion installation
+   command. Under `--strict` or `project.strict = true`, drift exits with
+   code 4 (§10).
+
+When the lock is current and the complete vendor tree matches its digests,
+`sync` takes a digest-based no-op path.
+
+### `status`
+
+`okr status` reports:
+
+- whether R is available and which version it exposes;
+- whether that version matches `project.r-version`, when declared;
+- whether the configuration digest matches the lock;
+- a spot-check of vendor tree integrity;
+- a summary of installed library coherence;
+- cache statistics; and
+- a copyable companion installation command.
+
+When `project.strict = true`, installed library drift makes `status` exit 4.
+There is no command-specific `--strict` flag for `status`.
+
+For example:
+
+```text
 install with:  Rscript -e 'pak::pkg_install(c("rpact","gsDesign"), repos="https://packagemanager.posit.co/cran/2026-06-30")'
 ```
 
-**`verify`** - Re-hash the full vendor tree against `okr.lock`. Tree
-integrity is **always** a hard check: exit 0 clean, exit 4 on any drift;
-`--json` lists entry-level tree mismatches with expected and actual aggregate
-digests. `--strict` additionally runs the library coherence check as hard (for
-eval sandboxes where the installed library is part of the attested
-environment). This is the eval harness's integrity gate.
+### `verify`
 
-**`bundle`** (0.2) - Deterministic `tar.zst` containing `okr.toml`,
-`okr.lock`, `deps-src/`, and (with `--include-cache`) the artifacts needed to
-rebuild the tree. Determinism rules: entries sorted by path, mtimes zeroed,
-uid/gid zeroed, modes normalized (0644/0755). Bundle sha256 is printed and
-reproducible across machines.
+`okr verify` hashes the complete vendor tree and compares it with `okr.lock`.
+Tree drift is always fatal: a clean tree exits 0 and any drift exits 4. With
+`--json`, the report lists each mismatched entry and its expected and actual
+aggregate tree digests.
+
+`--strict`, or `project.strict = true`, also makes installed library drift
+fatal. This is useful when an evaluation treats the installed R library as part
+of the attested environment.
+
+### `bundle` (0.2)
+
+`okr bundle` writes a deterministic `tar.zst` containing `okr.toml`,
+`okr.lock`, and the vendor tree. `--include-cache` also includes the artifacts
+needed to rebuild that tree. Entries are sorted by path, mtimes and ownership
+are zeroed, and modes are normalized to 0644 or 0755. The command prints the
+bundle's SHA-256, which must be reproducible across machines.
 
 ### Exit codes
 
-`0` success · `1` unexpected error · `2` config/spec error · `3`
-network/fetch error · `4` verification or strict-coherence failure.
+| Code | Meaning |
+|---:|---|
+| 0 | Success |
+| 1 | Unexpected I/O or internal error |
+| 2 | Configuration or source-specification error |
+| 3 | Network, resolution, or fetch error |
+| 4 | Verification or strict installed library coherence failure |
 
-## 7. Source spec grammar (R `Remotes` subset)
+## 7. Use familiar source specifications
 
-okr adopts the syntax R developers already know from the `Remotes:` field
-(remotes/devtools/pak), as both the `okr add` argument format and the string
-form in `okr.toml`:
+`okr` supports a deliberate subset of the syntax used by the R `Remotes:` field.
+The same syntax is accepted by `okr add` and by string values in `okr.toml`:
 
-```
+```text
 spec        := [type "::"] body ["@" ref]
 type        := "github" | "gitlab" | "bitbucket" | "git" | "url"
-body        := owner "/" repo            (forge types; github is the default type)
-             | <git URL>                 (git:: - any host, any protocol git supports)
-             | <http(s) URL to tarball>  (url::)
-ref         := tag | branch | commit SHA | "*release"   (*release: GitHub only)
+body        := owner "/" repo            (forge types; github is the default)
+             | <Git URL>                 (`git::`; any protocol Git supports)
+             | <HTTP(S) tarball URL>     (`url::`)
+ref         := tag | branch | commit SHA | "*release"   (GitHub only)
 ```
 
-| Spec | Meaning |
+| Specification | Meaning |
 |---|---|
-| `pharmaverse/admiral@v1.5.0` | GitHub (default type), tag |
-| `github::tidyverse/ggplot2` | GitHub, default branch (warns; SHA is locked) |
-| `r-lib/testthat@*release` | GitHub, latest release (resolved then frozen) |
-| `gitlab::jimhester/covr@abc123` | gitlab.com, commit |
-| `bitbucket::sulab/mygene.r@default` | bitbucket.org, branch |
-| `git::git@ghe.corp.example:stats/simlib.git@v2.1` | any git host via user's git auth |
-| `git::https://codeberg.org/org/pkg.git@v1.0` | ditto |
-| `url::https://example.com/pkg_0.2.1.tar.gz` | direct tarball (`sha256` required in table form) |
+| `pharmaverse/admiral@v1.5.0` | GitHub tag; `github::` is implicit |
+| `github::tidyverse/ggplot2` | GitHub default branch; warn and lock the resolved SHA |
+| `r-lib/testthat@*release` | Latest GitHub release; resolve it and lock its SHA |
+| `gitlab::jimhester/covr@abc123` | Commit or named ref on gitlab.com |
+| `bitbucket::sulab/mygene.r@default` | Branch on bitbucket.org |
+| `git::git@ghe.corp.example:stats/simlib.git@v2.1` | Any Git host, using the user's Git authentication |
+| `git::https://codeberg.org/org/pkg.git@v1.0` | Explicit Git URL over HTTPS |
+| `url::https://example.com/pkg_0.2.1.tar.gz` | Direct tarball; a `sha256` pin is required in table form |
 
-Status of the remaining `Remotes` types - errors are instructive and name the
-milestone or alternative:
+The following `Remotes` forms are out of scope for 0.1:
 
-| Spec form | Status |
+| Form | Status |
 |---|---|
-| `bioc::...` | **Planned (0.2)** - Bioconductor dated releases map cleanly onto okr's model |
-| `local::...` | **Planned (0.2)** - local path vendoring for unpublished internal packages |
-| `owner/repo#123` (PR refs) | **Planned (0.2)** |
-| `svn::...` | **Rejected permanently** - use `git::` or `url::` |
+| `bioc::...` | Planned for 0.2, using dated Bioconductor releases |
+| `local::...` | Planned for 0.2, for unpublished local packages |
+| `owner/repo#123` | Pull request refs are planned for 0.2 |
+| `svn::...` | Not planned; use `git::` or `url::` |
 
-In `[packages]`, a plain version string or `"*"` means CRAN from snapshot;
-any string containing `/` or `::` is parsed as a remote spec (R package
-versions never contain `/`, so this is unambiguous).
+Errors for these forms must name the planned milestone or the supported
+alternative shown above.
 
-## 8. Resolution & fetch strategy
+Within `[packages]`, a plain version or `"*"` means CRAN. A value containing
+`/` or `::` is a remote specification. R package versions cannot contain `/`,
+so the distinction is unambiguous.
 
-Resolution is a lookup, never a solver:
+## 8. Resolve first, then fetch exact source
 
-- **CRAN/snapshot:** fetch `{repo}/{snapshot}/src/contrib/PACKAGES.gz` once
-  per sync (cached), parse DCF, find each declared package's version (or
-  validate an explicit pin, falling back to the CRAN archive URL for
-  superseded versions). If the index repeats a package at different versions,
-  choose the greatest version using R's numeric package-version ordering.
-  Tarball: `{...}/src/contrib/{name}_{version}.tar.gz`.
-- **Git refs -> commit SHA:** `git ls-remote <url> <ref>` - universal across
-  hosts and protocols, uses the user's existing SSH keys and credential
-  helpers, has no API rate limits. A spec pinned to a full SHA skips
-  resolution. `@*release` (GitHub only) resolves via the tier below.
-- **GitHub API needs** (`@*release`, private tarball download), in order:
-  1. `gh` CLI, if on PATH and authenticated (`gh api ...`; honors `GH_HOST`
-     for GitHub Enterprise).
-  2. Direct REST with `GITHUB_TOKEN` from the environment.
-  3. Anonymous REST (low rate limits; a 403 produces a hint to install `gh`
-     and run `gh auth login`).
+Resolution freezes names into exact versions and commits. It performs lookups;
+it does not solve dependency constraints.
 
-**Fetch (download of the resolved commit), fastest applicable path wins:**
+### Resolve CRAN packages
 
-| Source situation | Method |
+Fetch `{repo}/{snapshot}/src/contrib/PACKAGES.gz` at most once per sync and
+cache it. Parse its DCF stanzas and find each declared package. `"*"` selects
+the version in the snapshot. An explicit version must either appear in the
+snapshot or be available from the CRAN archive.
+
+If the index contains the same package at multiple versions, select the
+greatest version using R's numeric package-version ordering. The source URL is:
+
+```text
+{repo}/{snapshot}/src/contrib/{name}_{version}.tar.gz
+```
+
+### Resolve Git refs
+
+A full 40-character commit SHA is already resolved. For a named ref or default
+branch, prefer:
+
+```text
+git ls-remote <url> [<ref>]
+```
+
+This works across hosts and protocols and reuses the user's SSH keys and
+credential helpers. If Git is unavailable or `ls-remote` fails for a GitHub,
+GitLab, or Bitbucket specification, use that forge's public commit API as a
+fallback. Branch and default-branch refs produce a warning because they can
+move, but the lock always records the resolved SHA.
+
+`@*release` needs GitHub release metadata. Try these sources in order:
+
+1. authenticated `gh api`, honoring `GH_HOST` for GitHub Enterprise;
+2. the GitHub REST API with `GITHUB_TOKEN`; and
+3. the anonymous GitHub REST API.
+
+If anonymous access is rate-limited, the error suggests installing `gh` and
+running `gh auth login`.
+
+### Fetch the resolved source
+
+Use the first applicable method that succeeds:
+
+| Source | Method |
 |---|---|
-| CRAN / `url::` | HTTPS tarball -> cache |
-| Public repo on a recognized forge (github.com, gitlab.com, bitbucket.org, codeberg.org) | Forge archive tarball at the resolved SHA -> cache |
-| Private GitHub | `gh api repos/{o}/{r}/tarball/{sha}` when `gh` available |
-| Anything else (`git::`, GHE, self-hosted, tarball fetch failed) | Shallow `git clone` at the ref (`--depth 1`, `core.autocrlf=false`), verify `HEAD` == resolved SHA, strip `.git` |
+| CRAN or `url::` | Download the HTTPS tarball into the cache |
+| Public repository on github.com, gitlab.com, bitbucket.org, or codeberg.org | Download the forge archive at the resolved SHA into the cache |
+| GitHub repository whose forge archive is unavailable | Request `repos/{owner}/{repo}/tarball/{sha}` through authenticated GitHub access |
+| Other Git source, or a Git-backed source whose archive fetch fails | Clone the locked ref with `--depth 1` and `core.autocrlf=false`, require `HEAD` to equal the resolved SHA, and remove `.git` |
 
-The `git` binary is therefore an **optional runtime dependency**: required
-only for `git::` sources and private/self-hosted hosts; never required for
-CRAN, `url::`, or public-forge sources. `okr status` reports git/`gh`
-availability. okr never links libgit2/gix and never manages credentials.
+The lock records the successful method. Later reconstruction must replay that
+method and artifact rather than silently substitute another one.
 
-Transitive vendoring is **out of scope for 0.1** (declared entries only).
-0.2 may add `transitive = "imports"` as a PACKAGES-metadata traversal:
-still not a version solver.
+The `git` executable is therefore optional. It is needed when a `git::` source
+requires ref resolution or cloning, for private or self-hosted hosts without
+another authenticated path, and for clone fallback. It is not needed for CRAN,
+`url::`, or a forge source that can be resolved through its API and downloaded
+as an archive. `okr status` reports whether `git` and `gh` are available.
+`okr` does not link to libgit2 or gix.
 
-## 9. Vendoring pipeline
+`--offline` may reuse commits already present in `okr.lock` and artifacts in the
+cache. It must not download an index or archive, query an API, run
+`git ls-remote`, or clone. Missing resolution data or artifacts produce a fetch
+error that names what must first be prepared online.
 
-1. Acquire per §8; tarballs land in the cache named by sha256 and are
-   verified before use. `--offline` requires a cache hit (else exit 3,
-   naming the missing artifact); clone-fetched sources are cached as a
-   normalized tarball of the pruned tree so offline mode covers them too.
-2. Extract to a temp dir; strip the top-level directory.
-3. Prune, by kind (globs, case-insensitive):
-   - **Packages:** exclude `data/**`, `pkgdown/**`, `docs/**`, `.github/**`,
-     `.git*`, `revdep/**`, `**/*.rda`, `**/*.rds`, `**/*.RData`, plus
-     `tests/**` when `include-tests = false`. Kept by design: `R/`, `src/`,
-     `man/`, `vignettes/`, `inst/`, `NEWS*`, `DESCRIPTION`, `NAMESPACE`,
-     `LICENSE*`.
-   - **References:** exclude only VCS metadata (`.git*`) by default:
-     reference repos are not R packages and R-motivated pruning must not apply.
-   - User `exclude` globs merge on top in both cases.
-4. Write to `deps-src/{name}/`, replacing atomically (sibling temp dir, rename).
-5. Compute the **tree digest**: sha256 over the sorted list of
-   `(relative-path, file-sha256)` pairs, newline-joined, `/`-normalized
-   paths. Byte-stable across platforms.
-6. Packages: parse `DESCRIPTION` for `Version` and `License`. References:
-   best-effort license detection from `LICENSE*`; no version beyond the SHA.
+Only declared entries are vendored in 0.1. Version 0.2 may add
+`transitive = "imports"`, a traversal of `Imports` metadata that remains a
+lookup rather than a solver.
 
-**Fetch-method determinism caveat:** forge archive tarballs honor
-`.gitattributes` `export-ignore`/`export-subst`, while clones do not: the
-same commit can yield different trees by method. The lockfile therefore
-records `fetch-method`, the digest attests the tree as actually produced,
-and offline/bundle reproduction replays the cached artifact rather than
-re-deriving by a different method.
+## 9. Build deterministic vendor trees
 
-## 10. Coherence & strictness
+Each resolved entry follows the same pipeline:
 
-okr cannot fix an installed library it refuses to touch, so by default it
-diagnoses instead of blocking (pit of success):
+1. **Acquire.** Put downloaded artifacts in the content-addressed cache and
+   verify SHA-256 before use. Reverify cache hits, and commit new artifacts with
+   a temporary file followed by rename. A clone-produced source is cached after
+   pruning as a normalized gzip tarball so it can also be replayed offline.
+2. **Extract safely.** Extract into a temporary directory and remove the single
+   archive wrapper directory. Reject absolute paths, `..` traversal, symlinks,
+   and entries that are not regular files or directories.
+3. **Prune by kind.** Apply case-insensitive default globs, then merge the
+   entry's `exclude` globs.
+4. **Replace atomically.** Write `deps-src/{name}/` through a sibling temporary
+   directory and rename it into place.
+5. **Hash the tree.** Inventory and hash the exact bytes left for agents.
+6. **Inspect metadata.** For packages, read `Version`, `License`, and `Title`
+   from `DESCRIPTION`. For references, detect a license from `LICENSE*` on a
+   best-effort basis.
 
-- **Default:** during `sync` and `status`, if R is present and an installed
-  package's version differs from the vendored version, emit a prominent
-  warning naming both versions and the companion install command against the
-  locked snapshot. If R is absent, the check is skipped and `status` says so.
-- **Strict:** `--strict` on `sync`/`verify`, or `strict = true` under
-  `[project]`, upgrades mismatches to exit 4. Eval profiles set this:
-  in a benchmark sandbox the installed library is part of the attested
-  environment and drift must be fatal.
-- **Never relaxed:** `verify`'s vendor-tree integrity check (tamper
-  detection) is hard regardless of strictness.
+Package defaults exclude:
 
-Library introspection is read-only: locate R, run a short `Rscript` snippet
-to enumerate `installed.packages()` fields (or parse DESCRIPTION files under
-`.libPaths()` directly), and never write.
+```text
+data/**
+pkgdown/**
+docs/**
+.github/**
+.git*
+revdep/**
+**/*.rda
+**/*.rds
+**/*.RData
+```
 
-## 11. Lockfile schema: `okr.lock`
+They also exclude `tests/**` when `include-tests = false`. The defaults retain
+`R/`, `src/`, `man/`, `vignettes/`, `inst/`, `NEWS*`, `DESCRIPTION`,
+`NAMESPACE`, and `LICENSE*`.
 
-TOML, generated, stable ordering (entries sorted by name within kind):
+Reference defaults exclude `.git*` and nothing else. Reference repositories
+are not assumed to have R package structure, so package-specific pruning does
+not apply.
+
+The tree inventory contains one record per regular file:
+
+```text
+relative/path<TAB>file-sha256
+```
+
+Paths are UTF-8, use `/` separators, and are sorted. Records are joined with LF
+and have no trailing newline. Hashing this inventory with SHA-256 produces the
+entry's `tree-digest`. Symlinks and other non-file entries are rejected rather
+than hashed.
+
+Clone-produced cache archives use sorted paths, zero mtimes and ownership, and
+normalized modes. This makes a clean rebuild byte-identical across machines.
+
+### Preserve the fetch method
+
+Forge archives honor `.gitattributes` rules such as `export-ignore` and
+`export-subst`; clones do not. The same commit can therefore produce different
+trees through the two methods. `fetch-method` is provenance, not an incidental
+optimization. The lock records the method that produced the attested tree, and
+offline or bundled reconstruction reuses its cached artifact.
+
+## 10. Separate tree integrity from library coherence
+
+These checks answer different questions and have different defaults.
+
+- **The vendored version must match.** A package's `DESCRIPTION` version must
+  equal the version selected during resolution.
+- **Tree integrity is always strict.** `verify` exits 4 whenever the vendor tree
+  differs from the lock, regardless of `--strict`.
+- **Installed library coherence is diagnostic by default.** During `sync` and
+  `status`, report any declared package that is absent from the installed
+  library or has a different version. Name both versions when available and
+  print the companion installation command for the locked snapshot.
+- **Strict mode attests the installed library too.** `--strict` turns drift into
+  exit code 4 for `sync` and `verify`. `strict = true` under `[project]` applies
+  the same rule to `sync`, `status`, and `verify`. Evaluation configurations can
+  use this when the R library is part of the environment being checked.
+
+If R is absent, library inspection is a successful skip and `status` explains
+why no comparison was made.
+
+Inspection is read-only. Locate `Rscript` and enumerate `installed.packages()`
+under the project's `.libPaths()` with a short script. Never execute the
+companion installation command or write to the library.
+
+## 11. Record provenance in `okr.lock`
+
+`okr.lock` is generated TOML. Packages and references are kept in separate
+arrays and sorted by name within each array.
 
 ```toml
-version = 1                          # lockfile schema
+version = 1
 okr-version = "0.1.0"
 generated = "2026-06-30T00:00:00Z"
-snapshot = "2026-06-30"              # present iff CRAN entries exist
-config-digest = "sha256:..."           # normalized okr.toml digest, staleness detection
-environment-digest = "sha256:..."      # digest over all entries below; the benchmark stamp
+snapshot = "2026-06-30"
+config-digest = "sha256:..."
+environment-digest = "sha256:..."
 
 [[package]]
 name = "rpact"
@@ -337,8 +459,8 @@ name = "admiral"
 version = "1.5.0"
 source = "github::pharmaverse/admiral"
 ref = "v1.5.0"
-commit = "9f2c..."
-fetch-method = "forge-tarball"       # tarball | forge-tarball | gh | git-clone
+commit = "9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c"
+fetch-method = "forge-tarball"
 artifact-digest = "sha256:..."
 tree-digest = "sha256:..."
 license = "Apache License (>= 2)"
@@ -347,187 +469,264 @@ license = "Apache License (>= 2)"
 name = "cdisc-standards"
 source = "git::git@ghe.corp.example:stds/cdisc.git"
 ref = "2026-Q2"
-commit = "77ab..."
+commit = "77ab77ab77ab77ab77ab77ab77ab77ab77ab77ab"
 fetch-method = "git-clone"
 artifact-digest = "sha256:..."
 tree-digest = "sha256:..."
 ```
 
-Serialized integrity fields follow one convention: the key is
-`<subject>-digest`, while the value carries the algorithm as
-`<algorithm>:<lowercase-hex>`. The current algorithm is SHA-256. Keeping the
-algorithm out of the key avoids another field rename if the algorithm changes.
-The `sha256` key accepted for direct-URL declarations is intentionally
-different: it is an algorithm-specific input pin, not a generic serialized
-attestation field. A git `commit` is likewise a source control identifier,
-not an okr content digest.
+`snapshot` is present only when the lock contains a CRAN package.
+`generated` is deterministic: snapshot midnight when a snapshot is present,
+otherwise the Unix epoch. It is never the wall-clock sync time.
 
-`config-digest` detects behavioral changes in normalized `okr.toml` content;
-comments and formatting do not affect it.
+The allowed fetch methods are `tarball`, `forge-tarball`, `gh`, and `git-clone`.
 
-`environment-digest` is deterministic given identical lock content and is
-the value an eval harness records per run and asserts via `okr verify`.
+### Use one digest convention
 
-`artifact-digest` attests the cached acquisition artifact. The neutral
-"artifact" name covers both downloaded archives and normalized archives
-created from clone-produced trees. Every package and reference entry has one.
-It cannot replace
-`tree-digest`: extraction and pruning produce a different byte set, and a
-clone source is cached as a normalized tarball only after pruning. The tree
-digest attests the source bytes agents actually read. `okr` computes it from
-the sorted per-file inventory described in §9, but does not serialize that
-inventory. Repeating every file hash would add no integrity beyond the
-collision-resistant aggregate and would make lock and manifest size grow with
-the number and path length of source files. Consequently, verification reports
-the entry whose tree changed rather than diagnosing an individual file.
+Serialized attestation fields use a `<subject>-digest` key and an
+`<algorithm>:<lowercase-hex>` value. The current algorithm is SHA-256.
+Keeping the algorithm in the value permits a future algorithm change
+without renaming every field.
 
-## 12. Agent integration
+The `sha256` key accepted by a direct URL declaration is different on purpose:
+it is an algorithm-specific input pin, not a serialized attestation.
+A Git `commit` is likewise a source-control identifier rather than
+an `okr` content digest.
 
-- `deps-src/_manifest.md` - compact tables, packages and references listed
-  separately: name, version (or commit), source, license, path, one-line
-  description (`Title` from DESCRIPTION where available). Header text tells
-  an agent what this tree is and that it is read-only reference material.
-- `deps-src/_manifest.json` - the same, machine-readable, plus aggregate
-  digests and `kind` per entry; schema versioned (`"schema": 1`). This is the
-  integration surface for eval harnesses.
-- `AGENTS.md` marker block (when `manifest.agents-file = true`):
+`config-digest` hashes the normalized configuration model.
+Comments and formatting do not change it.
 
-  ```
-  <!-- okr:begin -->
-  Vendored R dependency sources and reference repos live in `deps-src/`
-  (see `deps-src/_manifest.md`). Read them to understand APIs and
-  internals. Do not edit them; they are generated by `okr sync` and
-  verified by hash.
-  <!-- okr:end -->
-  ```
+`environment-digest` hashes the lock schema version and the name-sorted package
+and reference entries in a canonical representation.
+It includes each aggregate tree digest. Evaluation harnesses record this value
+for a run and ask `okr verify` to recompute it.
 
-  Only the marker block is ever touched; the file is created if absent.
-- `.gitignore`: default-managed entry for the vendor path. Committing the
-  tree is a legitimate choice for benchmark repos (`gitignore = false`)
-  because `verify` makes drift detectable either way.
+`artifact-digest` attests the cached acquisition artifact. "Artifact" includes
+both a downloaded archive and a normalized archive created from a clone.
+Every package and reference has one.
 
-## 13. Configuration schema: `okr.toml`
+`tree-digest` attests the bytes that agents can read after extraction and
+pruning. It cannot be replaced by `artifact-digest`, because the artifact and
+the visible tree contain different byte sets. The per-file inventory described
+in §9 is an input to this digest but is not serialized: doing so would bloat
+the lockfile and manifest without adding integrity beyond the aggregate hash.
+Verification therefore identifies the entry whose tree changed, not the
+individual file.
+
+## 12. Make the vendor tree discoverable
+
+`deps-src/_manifest.md` contains separate, compact tables for packages and
+references. Each row gives the name, version or commit, source, license, path,
+and one-line description (`Title` from `DESCRIPTION` when available). Its
+introduction says that the tree is generated, read-only reference material.
+
+`deps-src/_manifest.json` contains the same information plus each entry's
+`kind` and aggregate digests. It is schema-versioned with `"schema": 1` and is
+the machine-readable interface for evaluation harnesses.
+
+When `manifest.agents-file = true`, `okr` maintains this marker-delimited block
+in `AGENTS.md`:
+
+```markdown
+<!-- okr:begin -->
+Vendored R dependency sources and reference repos live in `deps-src/`
+(see `deps-src/_manifest.md`). Read them to understand APIs and
+internals. Do not edit them; they are generated by `okr sync` and
+verified by hash.
+<!-- okr:end -->
+```
+
+Only text between the markers may be replaced. If `AGENTS.md` does not exist,
+`okr` creates it.
+
+By default, `okr` also manages an entry for the vendor path in `.gitignore`.
+Set `vendor.gitignore = false` when the repository should commit the source
+tree. Both choices are valid because `verify` detects drift either way.
+
+## 13. Configure the project with `okr.toml`
 
 ```toml
 [project]
-r-version = "4.5.1"                  # optional expected harness R; advisory only
-snapshot = "2026-06-30"              # required iff any CRAN package is declared
-strict = false                       # coherence mismatches fatal when true (§10)
-# repo-url = "https://packagemanager.posit.co/cran"   # mirror override
+r-version = "4.5.1"                  # optional expected R; advisory only
+snapshot = "2026-06-30"              # required when CRAN packages are declared
+strict = false                       # make installed library drift fatal (§10)
+# repo-url = "https://packagemanager.posit.co/cran"
 
 [vendor]
 path = "deps-src"
-include-tests = true                 # dependency test suites are high-signal for agents...
-                                     # ...but may leak answers into benchmark sandboxes; eval profiles set false
-exclude = []                         # extra globs, merged with kind defaults (§9)
-gitignore = true                     # manage a .gitignore entry for the vendor path
+include-tests = true                 # tests often clarify package behavior
+                                     # evaluation configs may exclude revealing tests
+exclude = []                         # extra globs added to the kind defaults (§9)
+gitignore = true                     # manage the vendor path in .gitignore
 
 [manifest]
-agents-file = true                   # maintain a marker-delimited block in AGENTS.md
+agents-file = true                   # maintain the managed block in AGENTS.md
 
-[packages]                           # name = version | "*" | remote spec (§7) | table
-rpact = "*"                          # CRAN, version from snapshot
-gsDesign = "3.6.4"                   # CRAN, explicit pin (snapshot or archive)
+[packages]
+rpact = "*"                          # snapshot version
+gsDesign = "3.6.4"                  # explicit snapshot or archive version
 admiral = "pharmaverse/admiral@v1.5.0"
 covr = "gitlab::jimhester/covr@abc123"
 simlib = { git = "git@ghe.corp.example:stats/simlib.git", ref = "v2.1" }
 internalpkg = { url = "https://example.com/internalpkg_0.2.1.tar.gz", sha256 = "..." }
 rtables = { spec = "insightsengineering/rtables@v0.6.13", exclude = ["vignettes/**"] }
 
-[references]                         # arbitrary git repos for agent context; no version semantics
+[references]
 cdisc-standards = "git::git@ghe.corp.example:stds/cdisc.git@2026-Q2"
 protocol-templates = { git = "https://codeberg.org/org/protocols.git", ref = "main" }
 ```
 
-Rules:
+Apply these rules:
 
+- `snapshot` is required when, and only when, `[packages]` contains a CRAN declaration.
 - `r-version`, when present, is the exact `major.minor.patch` version expected
-  from the `Rscript` used to run or inspect the project. `sync` and `status`
-  compare it with `R.version$major` plus `R.version$minor` and warn on a
-  mismatch. `init` saves the version exposed by the project's current
-  `Rscript`, when available, as a convenient initial expectation; users may
-  edit or remove it when the intended harness differs. It is never populated
-  from CRAN's latest stable R release, which does not describe the local
-  project environment. The field does not affect resolution, fetching,
-  installation, or strict verification; `okr` still only reads R state.
-- String values are parsed per §7; tables allow per-entry options
-  (`spec`/`git`/`url`, `ref`, `sha256`, `exclude`, `include-tests`).
-- `[references]` entries must be git or url sources: CRAN specs there are a
-  config error.
-- Branch refs are accepted but warn; the resolved SHA is what gets locked,
-  so reproducibility is preserved either way.
-- Unknown keys are a hard config error (deny_unknown_fields): typos must not
-  silently no-op.
+  from the project's `Rscript`. `sync` and `status` compare it with
+  `R.version$major` plus `R.version$minor` and warn on a mismatch.
+  `init` uses the current `Rscript` only as a convenient initial value;
+  users may edit or remove it for a different target environment.
+  It is never inferred from the latest R release advertised by CRAN.
+  The field does not affect resolution, fetching, installation, or strict verification.
+- String declarations use the grammar in §7. Table declarations add per-entry
+  `spec`, `git`, `url`, `ref`, `sha256`, `exclude`, and `include-tests` options.
+- A direct URL requires a SHA-256 input pin.
+- Reference declarations must use Git or URL sources. A CRAN declaration under
+  `[references]` is a configuration error.
+- Package and reference names share the same vendor namespace and may not collide.
+- Branch refs are allowed but produce a warning. The resolved SHA, not the
+  branch name, provides reproducibility.
+- `vendor.path` must be a safe relative path within the project.
+- Unknown keys are hard errors (`deny_unknown_fields`). A misspelled option must
+  never be ignored.
 
-## 14. Benchmark / eval usage pattern
+Configuration updates made by `okr add` must use `toml_edit`; serializing the
+whole document through Serde would discard the user's formatting and comments.
 
+## 14. Use `okr` in an evaluation
+
+In 0.1, prepare the project and its R library while building the evaluation
+image, then verify both after network access has been disabled:
+
+```text
+okr sync
+# Install packages with the user's chosen tool and the snapshot shown by `okr status`.
+# Copy the prepared project, R library, and any required cache into the image.
+
+okr verify --strict --json || exit 1
 ```
-okr init --profile clinical-trials       # profile sets strict=true, include-tests=false
-okr sync                                 # on the image-build machine, online
-# install the library with your tool of choice against the same snapshot (see `okr status`)
+
+Profiles and bundles make the preparation step portable in 0.2:
+
+```text
+okr init --profile clinical-trials   # strict=true, include-tests=false
+okr sync
+# Install packages with the user's chosen tool against the same snapshot.
 okr bundle -o env.tar.zst --include-cache
-# inside the sandbox (network off):
-okr verify --strict --json || exit 1     # integrity gate before the agent runs
+
+# In the network-disabled sandbox:
+okr verify --strict --json || exit 1
 ```
 
-okr provides the environment's context layer and its attestation; the
-harness owns tasks, agents, and grading.
+`okr` owns source context and its attestation. The harness owns the runtime,
+tasks, agents, and grading.
 
-## 15. Implementation notes
+## 15. Keep the implementation small and synchronous
 
-- **Crates:**
-  - `clap` (derive)
-  - `indicatif`
-  - `xshell`
-  - `serde` + `toml` (read) + `toml_edit` (format-preserving writes)
-  - `reqwest` 0.13 (sync HTTP; no async runtime in 0.1, default-features = false, features = ["blocking", "json", "rustls",])
-  - `flate2` + `tar`
-  - `sha2`
-  - `globset` + `walkdir`
-  - `tempfile`
-  - `anyhow` (bin) + `thiserror` (lib)
-  - `insta` (snapshot tests)
-  - `zstd` (0.2)
-  - `assert_cmd` (dev-dependencies)
-  - `predicates` (dev-dependencies)
-- **Structure:** thin `main.rs`; library crate with modules `config`, `spec`
-  (Remotes-grammar parser), `resolve`, `fetch` (tiered strategy + cache),
-  `vendor`, `digest`, `lock`, `manifest`, `rlib` (read-only R library
-  introspection), `hosttools` (git/`gh` detection & shell-out), `cli`.
-- **Shell-outs:** `git` and `gh` are invoked using `xshell` crate with explicit
-  argument vectors (never through a shell), environment passed through so
-  user auth works. No libgit2/gix.
-- **DCF parsing** (PACKAGES, DESCRIPTION): implement minimally in-crate
-  (continuation lines, `key: value`); ~50 lines, avoids a dependency.
-- **No live network in tests.** Fixtures: synthetic package tarballs, a
-  canned PACKAGES file, and local `git init`-created repositories exercised
-  via `file://` URLs (covers ls-remote and clone paths without network).
-- Machine output (`--json`) is line-stable and schema-versioned; human
-  output may change freely.
+### Dependencies
+
+- `clap` with derive support
+- `indicatif`
+- `xshell`
+- `serde`, `toml` for reads, and `toml_edit` for format-preserving writes
+- `serde_json` for manifests and machine-readable output
+- `reqwest` 0.13 with synchronous HTTP, `default-features = false`, and
+  `features = ["blocking", "json", "rustls"]`
+- `flate2` and `tar`
+- `sha2`
+- `globset` and `walkdir`
+- `tempfile`
+- `anyhow` in the binary and `thiserror` in the library
+- `insta` for snapshot tests
+- `assert_cmd` and `predicates` as development dependencies
+- `zstd` in 0.2
+
+Do not add an asynchronous runtime. Runtime HTTP remains synchronous.
+
+### Modules
+
+Keep `main.rs` thin: parse the command line, invoke the library, render the
+error, and map it to the documented exit code. Put application behavior in
+library modules:
+
+- `config` for strict configuration parsing and validation;
+- `spec` for the `Remotes` grammar;
+- `resolve` and `resolve::dcf` for snapshot, metadata, and ref lookups; keep
+  GitHub release access behind the stubbable `GithubReleaseApi` seam;
+- `fetch` for synchronous acquisition and the content-addressed cache;
+- `hosttools` for `git` and `gh` discovery and invocation;
+- `vendor` for extraction, cloning, pruning, and atomic replacement;
+- `digest` for deterministic file and tree hashes;
+- `lock` for stable serialization and verification;
+- `manifest` for agent-facing outputs;
+- `rlib` for read-only R inspection; and
+- `cli` for command orchestration.
+
+Invoke `git` and `gh` through `xshell` with explicit argument vectors, never
+through a shell. Inherit the user's environment so existing authentication
+continues to work. Do not add libgit2, gix, or credential storage.
+
+Implement the small DCF subset needed for `PACKAGES` and `DESCRIPTION` in the
+crate. It must support `key: value` fields, continuation lines, and multiple
+stanzas without adding another parsing dependency.
+
+### Tests
+
+Tests must not require a live network. Use synthetic package tarballs, a canned
+`PACKAGES` index, and temporary repositories created with `git init` and
+accessed through `file://` URLs. Skip a Git test only when it genuinely needs
+the optional host executable.
+
+Keep parser tests table-driven and include hostile inputs. Cover lock and
+manifest formats with reviewed `insta` snapshots. Simulate R with a fake,
+read-only `Rscript` on `PATH` and test warning and strict behavior separately.
+
+Machine output is line-stable and schema-versioned. Human-readable output may
+evolve without a schema change.
 
 ## 16. Milestones
 
-- **0.1 - the wedge:** `init`, `add`, `sync`, `status`, `verify`; spec
-  grammar per §7 (CRAN, github/gitlab/bitbucket, `git::`, `url::`,
-  `@*release`); `[references]`; tiered fetch with `gh`/token/anonymous and
-  git-clone fallback; lockfile; manifests; cache; offline mode; coherence
-  diagnostics with `--strict`. Publishable to crates.io.
-- **0.2 - eval hardening & reach:** `bundle` (deterministic archives),
-  profiles (embedded + `--profile <path-or-url>`), `bioc::` and `local::`
-  sources, PR refs (`owner/repo#123`), transitive vendoring
-  (`"imports"` traversal), license inventory surfaced as a report.
+### 0.1: Readable and verifiable source context
 
-System requirement discovery and Dockerfile emission are deliberately not
-roadmap items; the ownership boundary in §4 applies.
+- `init`, `add`, `sync`, `status`, and `verify`
+- CRAN, GitHub, GitLab, Bitbucket, `git::`, `url::`, and `@*release`
+- packages and references
+- public-forge archive acquisition with authenticated and clone fallbacks
+- deterministic lockfile and manifests
+- content-addressed cache and offline replay
+- installed library diagnostics and strict mode
+- release to crates.io
 
-## 17. Open questions
+### 0.2: Portable evaluations and more source types
 
-1. Should `sync` fail (exit 3) or degrade when *some* entries fetch and
-   others don't? Lean: fail by default (a partial context tree silently
-   missing a dependency is worse than no update), with `--keep-going` for
-   exploratory use.
-2. Vendor `Suggests`-adjacent sources for declared packages? Lean: no.
-   Explicitness wins; `add` makes opting in cheap.
-3. Profile distribution: embedded in the binary vs. a community
-   `okr-profiles` repo fetched by name. Lean: embed 1 to 2 reference profiles
-   in 0.2, move to a repo when a second maintainer shows up.
+- deterministic bundles
+- embedded profiles and `--profile <path-or-url>`
+- `bioc::` and `local::`
+- pull request refs (`owner/repo#123`)
+- transitive `Imports` traversal
+- a surfaced license-inventory report
+
+System requirement discovery and Dockerfile generation are intentionally absent
+from the roadmap; the boundary in §4 continues to apply.
+
+## 17. Resolve the remaining design questions
+
+1. **What should happen when only some entries can be fetched?**
+   The proposed default is to fail with exit code 3. A partial tree is easy to
+   mistake for a complete one. A future `--keep-going` option could support
+   exploratory diagnosis.
+2. **Should transitive vendoring include `Suggests`?**
+   The proposed answer is no. Keep optional sources explicit and make
+   `okr add` the inexpensive way to opt in.
+3. **Where should profiles live?**
+   Start 0.2 with one or two profiles embedded in the binary.
+   Move to a separately maintained `okr-profiles` repository
+   only when its maintenance and review model are clear.
