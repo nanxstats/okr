@@ -118,8 +118,11 @@ backward through a bounded 14-day window, and write the first available exact
 date as `project.snapshot`. The successful index response is cached for the
 first sync. Connectivity and server failures are fetch errors; only a missing
 snapshot advances to the previous date. Never write the moving `latest` alias,
-because the configured snapshot must remain reproducible. Refuses to overwrite
-without `--force`. Offers to append the vendor path to `.gitignore` (see §12).
+because the configured snapshot must remain reproducible. When `Rscript` is
+available on `PATH`, run it read-only from the project directory and record its
+exact `major.minor.patch` version as `project.r-version`; omit the optional
+field when R is absent or cannot be inspected. Refuses to overwrite without
+`--force`. Offers to append the vendor path to `.gitignore` (see §12).
 
 **`add`** - Parse each `<spec>` per the grammar in §7 and insert it into
 `[packages]` (or `[references]` with `--reference`), preserving user comments
@@ -142,7 +145,8 @@ and formatting (`toml_edit`). Does not run sync.
 Re-running `sync` with an up-to-date lock and intact tree is a no-op
 (fast-path via digest comparison).
 
-**`status`** - Report: R presence/version (advisory vs `project.r-version`),
+**`status`** - Report: R presence/version (including an exact advisory
+comparison when `project.r-version` is declared),
 lock freshness (config digest vs lock), vendor-tree integrity spot-check,
 library coherence summary, cache stats, and the copy-paste companion install
 line, for example:
@@ -403,8 +407,7 @@ the entry whose tree changed rather than diagnosing an individual file.
 
 ```toml
 [project]
-name = "trial-design-bench"          # optional
-r-version = "4.5.1"                  # optional, advisory (status/diagnostics only)
+r-version = "4.5.1"                  # optional expected harness R; advisory only
 snapshot = "2026-06-30"              # required iff any CRAN package is declared
 strict = false                       # coherence mismatches fatal when true (§10)
 # repo-url = "https://packagemanager.posit.co/cran"   # mirror override
@@ -435,6 +438,15 @@ protocol-templates = { git = "https://codeberg.org/org/protocols.git", ref = "ma
 
 Rules:
 
+- `r-version`, when present, is the exact `major.minor.patch` version expected
+  from the `Rscript` used to run or inspect the project. `sync` and `status`
+  compare it with `R.version$major` plus `R.version$minor` and warn on a
+  mismatch. `init` saves the version exposed by the project's current
+  `Rscript`, when available, as a convenient initial expectation; users may
+  edit or remove it when the intended harness differs. It is never populated
+  from CRAN's latest stable R release, which does not describe the local
+  project environment. The field does not affect resolution, fetching,
+  installation, or strict verification; `okr` still only reads R state.
 - String values are parsed per §7; tables allow per-entry options
   (`spec`/`git`/`url`, `ref`, `sha256`, `exclude`, `include-tests`).
 - `[references]` entries must be git or url sources: CRAN specs there are a

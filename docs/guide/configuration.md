@@ -16,8 +16,7 @@ fail immediately instead of silently changing reproducibility.
 
 ```toml
 [project]
-name = "trial-design-bench"
-r-version = "4.5.1"
+r-version = "4.5.1" # optional expected project runtime
 snapshot = "2026-06-30"
 strict = false
 # repo-url = "https://packagemanager.posit.co/cran"
@@ -48,8 +47,7 @@ protocol-templates = { git = "https://codeberg.org/org/protocols.git", ref = "ma
 
 | Key | Default | Meaning |
 |---|---|---|
-| `name` | unset | Optional project label. |
-| `r-version` | unset | Expected R version for advisory status output; `okr` never installs it. |
+| `r-version` | unset | Exact R runtime expected by the project harness; advisory only. |
 | `snapshot` | unset | Exact `YYYY-MM-DD` CRAN snapshot. Required when any CRAN package is declared. |
 | `strict` | `false` | Make installed-library version mismatches fail `sync`, `status`, and `verify` with exit code 4. |
 | `repo-url` | Posit Package Manager CRAN | Base URL for a compatible dated CRAN repository or mirror. |
@@ -57,6 +55,20 @@ protocol-templates = { git = "https://codeberg.org/org/protocols.git", ref = "ma
 `okr init` fills `snapshot` with the latest available exact date found in a
 bounded 14-day search. It never writes a moving `latest` alias. A remote-only
 configuration may omit the snapshot.
+
+`r-version` uses R's exact `major.minor.patch` form, such as `4.5.1`. When it
+is set, `okr sync` and `okr status` compare it with the version reported by the
+`Rscript` on `PATH` and warn when they differ. The field records the runtime
+the project or evaluation harness is intended to use; it does not select,
+install, or strictly verify R, and it does not affect package source
+resolution.
+
+`okr init` runs the `Rscript` on `PATH` read-only from the project directory
+and records its version when detection succeeds. If R is absent or unavailable,
+initialization still succeeds and omits the optional field. Edit or remove the
+generated value when the intended harness differs from the environment used
+for initialization. `okr` never substitutes the latest stable R release from
+CRAN because that does not describe the project's actual runtime.
 
 ## Vendor settings
 

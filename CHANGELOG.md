@@ -4,6 +4,11 @@
 
 ### Improvements
 
+- Remove the unused `project.name` configuration field from `okr.toml`.
+  Define `project.r-version` as an optional exact expectation for the project
+  harness's R runtime, validate its `major.minor.patch` form, and initialize it
+  from the project's current `Rscript` when available instead of emitting a
+  placeholder value (#39).
 - Explain clearly when a synced source declared in `[packages]` has no
   `DESCRIPTION` file, including how to move or re-add a non-R project
   under `[references]` (#38).

@@ -28,7 +28,9 @@ okr [GLOBAL OPTIONS] <COMMAND>
 
 Creates a default configuration and manages its `.gitignore` entry. It probes
 the current UTC date and up to 13 preceding dates for the first available
-snapshot, caching the successful `PACKAGES.gz` response.
+snapshot, caching the successful `PACKAGES.gz` response. When `Rscript` is
+available on `PATH`, `init` records its exact version in `project.r-version`;
+R remains optional, so failed or unavailable detection simply omits the field.
 
 `--force` replaces an existing configuration. The displayed `--profile`
 option is reserved for milestone 0.2 and currently returns an instructive
@@ -60,7 +62,8 @@ non-interactive output remains line-oriented.
 
 Reports:
 
-- R availability, version, and advisory `project.r-version` agreement;
+- R availability and version, plus exact advisory agreement with
+  `project.r-version` when configured;
 - `git` and `gh` availability;
 - lock presence and configuration freshness;
 - vendor-tree status and mismatch count;
