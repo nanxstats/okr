@@ -29,8 +29,21 @@ well as day-to-day agent work.
 
 ## Start here
 
+Install with Homebrew:
+
+```console
+brew install nanxstats/tap/okr
+```
+
+Or install with Cargo:
+
 ```console
 cargo install okr
+```
+
+Then initialize a project:
+
+```console
 okr init
 okr add ggsci
 okr sync

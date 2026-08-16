@@ -13,6 +13,14 @@ greppable synthetic monorepo with recorded integrity digests.
 
 ## Install
 
+With Homebrew:
+
+```console
+brew install nanxstats/tap/okr
+```
+
+Or with Cargo:
+
 ```console
 cargo install okr
 ```
