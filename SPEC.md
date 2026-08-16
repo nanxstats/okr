@@ -334,9 +334,9 @@ license = "LGPL-2.1"
 
 [[package]]
 name = "admiral"
-version = "1.3.0"
+version = "1.5.0"
 source = "github::pharmaverse/admiral"
-ref = "v1.3.0"
+ref = "v1.5.0"
 commit = "9f2c..."
 fetch-method = "forge-tarball"       # tarball | forge-tarball | gh | git-clone
 artifact-digest = "sha256:..."
