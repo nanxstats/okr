@@ -239,7 +239,7 @@ pub fn update_gitignore(project_directory: &Path, config: &Config) -> Result<()>
 fn render_markdown(config: &Config, lock: &Lockfile, vendored: &VendorResult) -> Result<String> {
     let vendor_path = normalized_config_path(&config.vendor.path)?;
     let mut markdown = format!(
-        "# Vendored source manifest\n\nThis tree contains generated, read-only R dependency sources and reference repositories for coding-agent context. Do not edit it directly; run `okr sync` to regenerate it.\n\nEnvironment digest: `{}`\n\n## Packages\n\n| Name | Version | Source | License | Path | Description |\n|---|---|---|---|---|---|\n",
+        "# Vendored source manifest\n\nThis tree contains generated, read-only R dependency sources and reference repositories for coding agent context. Do not edit it directly; run `okr sync` to regenerate it.\n\nEnvironment digest: `{}`\n\n## Packages\n\n| Name | Version | Source | License | Path | Description |\n|---|---|---|---|---|---|\n",
         lock.environment_digest
     );
     for package in &lock.packages {
