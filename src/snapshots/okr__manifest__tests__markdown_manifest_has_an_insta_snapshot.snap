@@ -4,7 +4,7 @@ expression: "render(&config, &lock, &vendored).unwrap().markdown"
 ---
 # Vendored source manifest
 
-This tree contains generated, read-only R dependency sources and reference repositories for coding-agent context. Do not edit it directly; run `okr sync` to regenerate it.
+This tree contains generated, read-only R dependency sources and reference repositories for coding agent context. Do not edit it directly; run `okr sync` to regenerate it.
 
 Environment digest: `sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`
 
