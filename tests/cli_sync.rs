@@ -199,6 +199,61 @@ fn file_git_reference_rebuilds_offline_from_the_normalized_clone_cache() {
     );
 }
 
+#[test]
+fn sync_explains_when_a_reference_was_declared_as_a_package() {
+    if !host_git() {
+        return;
+    }
+    let project = tempdir().unwrap();
+    let cache = project.path().join("cache");
+    let repository = project.path().join("not-an-r-package");
+    fs::create_dir(&repository).unwrap();
+    fs::write(repository.join("README.md"), "# Reference project\n").unwrap();
+    let shell = Shell::new().unwrap();
+    cmd!(shell, "git init -q -b main {repository}")
+        .run()
+        .unwrap();
+    cmd!(shell, "git -C {repository} config user.name okr-test")
+        .run()
+        .unwrap();
+    cmd!(
+        shell,
+        "git -C {repository} config user.email okr@example.test"
+    )
+    .run()
+    .unwrap();
+    cmd!(shell, "git -C {repository} add README.md")
+        .run()
+        .unwrap();
+    cmd!(shell, "git -C {repository} commit -q -m fixture")
+        .run()
+        .unwrap();
+    let commit = cmd!(shell, "git -C {repository} rev-parse HEAD")
+        .read()
+        .unwrap();
+    let source = format!("git::file://{}@{commit}", repository.display());
+    fs::write(
+        project.path().join("okr.toml"),
+        format!("[packages]\nnot-an-r-package = \"{source}\"\n"),
+    )
+    .unwrap();
+    let normal_path = std::env::var_os("PATH").unwrap();
+
+    okr(project.path(), &cache, Path::new(&normal_path))
+        .arg("sync")
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains(
+            "source `not-an-r-package` was declared in `[packages]`",
+        ))
+        .stderr(predicate::str::contains(
+            "move its `not-an-r-package` declaration from `[packages]` to `[references]`",
+        ))
+        .stderr(predicate::str::contains(format!(
+            "okr add {source} --reference"
+        )));
+}
+
 fn okr(project: &Path, cache: &Path, path: &Path) -> assert_cmd::Command {
     let mut command = cargo_bin_cmd!("okr");
     command

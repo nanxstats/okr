@@ -1,5 +1,13 @@
 # Changelog
 
+## okr (development version)
+
+### Improvements
+
+- Explain clearly when a synced source declared in `[packages]` has no
+  `DESCRIPTION` file, including how to move or re-add a non-R project
+  under `[references]` (#38).
+
 ## okr 0.1.3
 
 ### Improvements
