@@ -27,9 +27,12 @@ Keep these invariants intact:
 - Tree drift is always fatal to `verify` with exit code 4. Installed-library
   drift warns by default and becomes fatal only under `--strict` or
   `project.strict`.
-- Milestone 0.2 and 0.3 features belong on the roadmap until their milestone
+- System-requirement discovery and Dockerfile emission are out of scope. Point
+  users to `renv::sysreqs()` / `pak::pkg_sysreqs()` and their chosen container
+  tooling instead.
+- Milestone 0.2 features belong on the roadmap until their milestone
   is intentionally started. Do not partially introduce profiles, bundles,
-  Bioconductor/local sources, transitive resolution, PR refs, or sysreqs.
+  Bioconductor/local sources, PR refs, or transitive resolution.
 
 ## Runtime architecture
 
@@ -56,13 +59,13 @@ library modules.
 | `src/lib.rs` | Public modules, shared `Error`, and stable exit-code classes. | Config/spec = 2, fetch = 3, verification/coherence = 4, unexpected I/O = 1. |
 | `src/cli.rs` | Clap surface and orchestration for `init`, `add`, `sync`, `status`, and `verify`. | Keep `main.rs` thin; reject `--json` where unsupported; preserve sync's digest-based no-op path. |
 | `src/config.rs` | Strict serde models, defaults, validation, and declaration normalization for `okr.toml`. | Keep `deny_unknown_fields`, safe relative vendor paths, URL digests, and package/reference name collision checks. Never use serde to write `okr add` edits. |
-| `src/spec.rs` | Parser for the supported R `Remotes` grammar and CRAN/remote disambiguation. | Preserve instructive 0.2/0.3/rejected-source errors. Extend its table-driven and hostile-input tests with every grammar change. |
+| `src/spec.rs` | Parser for the supported R `Remotes` grammar and CRAN/remote disambiguation. | Preserve instructive 0.2/rejected-source errors. Extend its table-driven and hostile-input tests with every grammar change. |
 | `src/resolve.rs` | Snapshot lookup, archive fallback, git-ref freezing, public-forge API fallback, and GitHub release tiering. | Lookup only, never solve constraints. Full 40-character SHAs skip ref resolution. Keep the `GithubReleaseApi` seam stubbable. |
 | `src/resolve/dcf.rs` | Minimal DCF parser for `PACKAGES` and `DESCRIPTION`. | Support continuation lines and multiple stanzas without adding a parsing dependency. |
 | `src/fetch.rs` | Synchronous HTTP/file acquisition and the content-addressed cache under `OKR_CACHE_DIR`. | Verify SHA-256 before commit, use temp-file plus rename, reverify hits, and fail clearly on offline misses. |
 | `src/hosttools.rs` | Optional `git`/`gh` discovery and all host-tool subprocess calls. | Use only `xshell` argument vectors; inherit user auth; produce actionable missing-tool errors; clone with `core.autocrlf=false`. |
 | `src/vendor.rs` | Tar extraction, clone fallback, kind-specific pruning, metadata inspection, normalized clone caching, and atomic tree replacement. | Reject unsafe tar entries and non-files; packages and references have different pruning defaults; record the actual fetch method. |
-| `src/digest.rs` | SHA-256 helpers and deterministic source-tree inventories. | Sort paths, normalize separators to `/`, hash file bytes exactly, and reject symlinks/non-files. |
+| `src/digest.rs` | SHA-256 helpers and deterministic source tree inventories. | Sort paths, normalize separators to `/`, hash file bytes exactly, and reject symlinks/non-files. |
 | `src/lock.rs` | Stable lock construction/serialization plus full vendor and manifest verification. | Sort entries, retain aggregate tree digests, recompute the environment digest, and keep clean rebuilds byte-identical. |
 | `src/manifest.rs` | `_manifest.json`, `_manifest.md`, `AGENTS.md` marker blocks, and managed `.gitignore` entries. | JSON is schema-versioned; package/reference sections remain distinct; only text inside okr marker blocks may be replaced. |
 | `src/rlib.rs` | Read-only `Rscript` discovery, installed package enumeration, and coherence comparison. | Absence of R is a successful skip with a note. Never execute the companion install command. |

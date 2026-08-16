@@ -90,6 +90,6 @@ environment digest on success.
 |---:|---|
 | `0` | Success. |
 | `1` | Unexpected I/O or internal error. |
-| `2` | Configuration or source-specification error. |
+| `2` | Configuration or source specification error. |
 | `3` | Network, acquisition, or offline cache-miss error. |
 | `4` | Integrity verification or strict installed-library coherence failure. |

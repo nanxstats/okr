@@ -33,6 +33,8 @@ designed to sit beside them:
 | R toolchain installation | `rig` |
 | Package installation & dependency resolution | `pak` / `renv` / `rv` / `install.packages()` |
 | Version pinning across time | Posit Package Manager dated snapshots |
+| System-requirement discovery | `renv::sysreqs()` / `pak::pkg_sysreqs()` |
+| Container-image construction | `renv` + Docker / other container tooling |
 | Source legibility, provenance, verification | **okr** |
 
 okr reads the installed library (when R is present) purely as a diagnostic,
@@ -69,6 +71,12 @@ snapshot, but executing it is the user's (or their package manager's) job.
   `GITHUB_TOKEN`; git auth is delegated to the user's git configuration.
 - **No multi-language support.** R's opacity is the reason okr exists.
 - **No renv/rv interop or lockfile conversion.**
+- **No system-requirement discovery or Dockerfile generation.** These describe
+  the installed runtime environment, not source context. Use
+  `renv::sysreqs()` or `pak::pkg_sysreqs()` for OS packages and use renv plus
+  the chosen container tooling to construct images. okr's container-facing
+  contract is its lock, vendored tree, manifests, verification command, and
+  portable bundle.
 
 ## 5. Core concepts
 
@@ -105,7 +113,6 @@ okr sync [--offline] [--strict]
 okr status [--json]
 okr verify [--json] [--strict]
 okr bundle [-o <path>] [--include-cache]      # milestone 0.2
-okr sysreqs [--os ubuntu-26.04]               # milestone 0.3 (prints info only)
 
 Global flags: --config <path>  --quiet  --verbose  --json (where noted)
 ```
@@ -168,10 +175,6 @@ rebuild the tree. Determinism rules: entries sorted by path, mtimes zeroed,
 uid/gid zeroed, modes normalized (0644/0755). Bundle sha256 is printed and
 reproducible across machines.
 
-**`sysreqs`** (0.3) - Query PPM system-requirements metadata for declared
-packages and print OS package lists (apt/dnf). Informational only; okr never
-installs them.
-
 ### Exit codes
 
 `0` success · `1` unexpected error · `2` config/spec error · `3`
@@ -210,7 +213,7 @@ milestone or alternative:
 |---|---|
 | `bioc::...` | **Planned (0.2)** - Bioconductor dated releases map cleanly onto okr's model |
 | `local::...` | **Planned (0.2)** - local path vendoring for unpublished internal packages |
-| `owner/repo#123` (PR refs) | **Planned (0.3)** |
+| `owner/repo#123` (PR refs) | **Planned (0.2)** |
 | `svn::...` | **Rejected permanently** - use `git::` or `url::` |
 
 In `[packages]`, a plain version string or `"*"` means CRAN-from-snapshot;
@@ -356,7 +359,7 @@ Serialized integrity fields follow one convention: the key is
 algorithm out of the key avoids another field rename if the algorithm changes.
 The `sha256` key accepted for direct-URL declarations is intentionally
 different: it is an algorithm-specific input pin, not a generic serialized
-attestation field. A git `commit` is likewise a source-control identifier,
+attestation field. A git `commit` is likewise a source control identifier,
 not an okr content digest.
 
 `config-digest` detects behavioral changes in normalized `okr.toml` content;
@@ -511,10 +514,11 @@ harness owns tasks, agents, and grading.
   diagnostics with `--strict`. Publishable to crates.io.
 - **0.2 - eval hardening & reach:** `bundle` (deterministic archives),
   profiles (embedded + `--profile <path-or-url>`), `bioc::` and `local::`
-  sources, transitive vendoring (`"imports"` traversal), license inventory
-  surfaced as a report.
-- **0.3 - operations:** `sysreqs` (informational), Dockerfile emission
-  (`okr bundle --docker`), PR refs (`owner/repo#123`).
+  sources, PR refs (`owner/repo#123`), transitive vendoring
+  (`"imports"` traversal), license inventory surfaced as a report.
+
+System requirement discovery and Dockerfile emission are deliberately not
+roadmap items; the ownership boundary in §4 applies.
 
 ## 17. Open questions
 
