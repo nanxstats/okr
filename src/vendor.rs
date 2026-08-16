@@ -626,10 +626,14 @@ fn metadata(
         EntryKind::Package => {
             let path = directory.join("DESCRIPTION");
             let contents = fs::read_to_string(&path).map_err(|error| {
-                Error::Fetch(format!(
-                    "package {} has no readable DESCRIPTION: {error}",
-                    entry.name
-                ))
+                if error.kind() == io::ErrorKind::NotFound {
+                    missing_package_description(entry)
+                } else {
+                    Error::Fetch(format!(
+                        "package {} has an unreadable DESCRIPTION: {error}",
+                        entry.name
+                    ))
+                }
             })?;
             let description = dcf::parse_one(&contents).map_err(|error| {
                 Error::Fetch(format!(
@@ -677,6 +681,35 @@ fn metadata(
             reference_title(directory),
         )),
     }
+}
+
+fn missing_package_description(entry: &ResolvedEntry) -> Error {
+    let mut message = format!(
+        "source `{}` was declared in `[packages]`, but it has no `DESCRIPTION` file and may not be an R package",
+        entry.name
+    );
+    if !matches!(entry.source, ResolvedSource::Cran { .. }) {
+        message.push_str(&format!(
+            ". If it is a non-R project, move its `{}` declaration from `[packages]` to `[references]` in `okr.toml` (preserving the value)",
+            entry.name
+        ));
+        if let ResolvedSource::Git {
+            source,
+            requested_ref,
+            ..
+        } = &entry.source
+        {
+            let source = source.strip_prefix("github::").unwrap_or(source);
+            let reference = requested_ref
+                .as_deref()
+                .map(|reference| format!("@{reference}"))
+                .unwrap_or_default();
+            message.push_str(&format!(
+                ", or remove it from `[packages]` and run `okr add {source}{reference} --reference`"
+            ));
+        }
+    }
+    Error::Fetch(message)
 }
 
 fn fold_one_line(value: &str) -> String {
@@ -778,7 +811,8 @@ mod tests {
     use xshell::{Shell, cmd};
 
     use super::{
-        detect_reference_license, extract_tarball, github_api_tarball_url, reference_title, vendor,
+        detect_reference_license, extract_tarball, github_api_tarball_url, metadata,
+        reference_title, vendor,
     };
     use crate::config::Config;
     use crate::fetch::{Cache, Fetcher};
@@ -831,6 +865,35 @@ mod tests {
                 .unwrap()
                 .as_deref(),
             Some("LICENSE.binary")
+        );
+    }
+
+    #[test]
+    fn missing_package_description_suggests_reference_recovery() {
+        let directory = tempdir().unwrap();
+        let entry = ResolvedEntry {
+            name: "okr".into(),
+            kind: crate::config::EntryKind::Package,
+            source: ResolvedSource::Git {
+                source: "github::nanxstats/okr".into(),
+                clone_url: "https://github.com/nanxstats/okr.git".into(),
+                requested_ref: None,
+                locked_ref: None,
+                commit: "a".repeat(40),
+                archive_url: None,
+                github: None,
+            },
+            exclude: Vec::new(),
+            include_tests: None,
+            artifact_sha256: None,
+            preferred_fetch_method: None,
+        };
+
+        let error = metadata(&entry, directory.path()).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "source `okr` was declared in `[packages]`, but it has no `DESCRIPTION` file and may not be an R package. If it is a non-R project, move its `okr` declaration from `[packages]` to `[references]` in `okr.toml` (preserving the value), or remove it from `[packages]` and run `okr add nanxstats/okr --reference`"
         );
     }
 
