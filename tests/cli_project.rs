@@ -127,7 +127,7 @@ strict=false # keep compact formatting
     fs::write(project.path().join("okr.toml"), config).unwrap();
 
     okr(project.path(), &cache, &empty_path)
-        .args(["add", "pharmaverse/admiral@v1.3.0", "tinyone"])
+        .args(["add", "pharmaverse/admiral@v1.5.0", "tinyone"])
         .assert()
         .success()
         .stdout(predicate::str::contains("added admiral"))
@@ -149,7 +149,7 @@ strict=false # keep compact formatting
 
     let before_error = updated.into_bytes();
     okr(project.path(), &cache, &empty_path)
-        .args(["add", "pharmaverse/admiral@v1.3.0"])
+        .args(["add", "pharmaverse/admiral@v1.5.0"])
         .assert()
         .code(2)
         .stderr(predicate::str::contains("already exists"));

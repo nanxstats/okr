@@ -62,7 +62,7 @@
 ### Bug fixes
 
 - Accept repeated same-version package records in snapshot `PACKAGES` indexes,
-  as emitted for R's recommended packages by Posit Package Manager (#11).
+  as emitted for R's recommended packages by Posit (Public) Package Manager (#11).
 - Deterministically choose the greatest R package version when repeated
   snapshot index records disagree (#13).
 - Ignore PAX global metadata headers when determining and stripping a source

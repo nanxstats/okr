@@ -378,7 +378,7 @@ mod tests {
     fn parses_every_supported_spec_table_row() {
         let cases = [
             ValidCase {
-                input: "pharmaverse/admiral@v1.3.0",
+                input: "pharmaverse/admiral@v1.5.0",
                 remote_type: RemoteType::Github,
                 location: forge("pharmaverse", "admiral"),
                 reference: named("v1.3.0"),

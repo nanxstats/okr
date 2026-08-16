@@ -34,7 +34,7 @@ gsDesign = "3.6.4"
 
 | Type | Body | Example |
 |---|---|---|
-| GitHub, implicit | `owner/repo` | `pharmaverse/admiral@v1.3.0` |
+| GitHub, implicit | `owner/repo` | `pharmaverse/admiral@v1.5.0` |
 | `github::` | `owner/repo` | `github::tidyverse/ggplot2@main` |
 | `gitlab::` | `owner/repo` | `gitlab::jimhester/covr@abc123` |
 | `bitbucket::` | `owner/repo` | `bitbucket::sulab/mygene.r@default` |

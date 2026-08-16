@@ -27,7 +27,7 @@ use crate::{Error, Result};
     name = "okr",
     version,
     about,
-    after_long_help = "Examples:\n  okr init\n  okr add pharmaverse/admiral@v1.3.0\n  okr sync\n  okr verify --strict --json\n\nokr retrieves and verifies source context. It never installs R or R packages."
+    after_long_help = "Examples:\n  okr init\n  okr add pharmaverse/admiral@v1.5.0\n  okr sync\n  okr verify --strict --json\n\nokr retrieves and verifies source context. It never installs R or R packages."
 )]
 pub struct Cli {
     /// Path to the project configuration.
@@ -80,7 +80,7 @@ pub struct InitArgs {
 
 #[derive(Debug, Args)]
 #[command(
-    after_long_help = "Examples:\n  okr add rpact\n  okr add pharmaverse/admiral@v1.3.0\n  okr add github::tidyverse/ggplot2\n  okr add r-lib/testthat@*release\n  okr add gitlab::jimhester/covr@abc123\n  okr add bitbucket::sulab/mygene.r@default\n  okr add git::git@ghe.example:stats/simlib.git@v2.1\n  okr add --reference git::https://codeberg.org/org/protocols.git@main\n\nDirect url:: tarballs require table form in okr.toml so a sha256 can be declared. Bare names such as `rpact` add a CRAN `*` entry against project.snapshot."
+    after_long_help = "Examples:\n  okr add rpact\n  okr add pharmaverse/admiral@v1.5.0\n  okr add github::tidyverse/ggplot2\n  okr add r-lib/testthat@*release\n  okr add gitlab::jimhester/covr@abc123\n  okr add bitbucket::sulab/mygene.r@default\n  okr add git::git@ghe.example:stats/simlib.git@v2.1\n  okr add --reference git::https://codeberg.org/org/protocols.git@main\n\nDirect url:: tarballs require table form in okr.toml so a sha256 can be declared. Bare names such as `rpact` add a CRAN `*` entry against project.snapshot."
 )]
 pub struct AddArgs {
     /// Source specifications to add.

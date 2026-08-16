@@ -33,7 +33,7 @@ agents-file = true
 [packages]
 rpact = "*"
 gsDesign = "3.6.4"
-admiral = "pharmaverse/admiral@v1.3.0"
+admiral = "pharmaverse/admiral@v1.5.0"
 simlib = { git = "git@ghe.example:stats/simlib.git", ref = "v2.1" }
 internalpkg = { url = "https://example.com/internalpkg_0.2.1.tar.gz", sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
 rtables = { spec = "insightsengineering/rtables@v0.6.13", exclude = ["vignettes/**"] }
@@ -50,7 +50,7 @@ protocol-templates = { git = "https://codeberg.org/org/protocols.git", ref = "ma
 | `r-version` | unset | Exact R runtime expected by the project harness; advisory only. |
 | `snapshot` | unset | Exact `YYYY-MM-DD` CRAN snapshot. Required when any CRAN package is declared. |
 | `strict` | `false` | Make installed-library version mismatches fail `sync`, `status`, and `verify` with exit code 4. |
-| `repo-url` | Posit Package Manager CRAN | Base URL for a compatible dated CRAN repository or mirror. |
+| `repo-url` | Posit (Public) Package Manager CRAN | Base URL for a compatible dated CRAN repository or mirror. |
 
 `okr init` fills `snapshot` with the latest available exact date found in a
 bounded 14-day search. It never writes a moving `latest` alias. A remote-only
