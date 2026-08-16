@@ -54,7 +54,11 @@ protocol-templates = { git = "https://codeberg.org/org/protocols.git", ref = "ma
 
 `okr init` fills `snapshot` with the latest available exact date found in a
 bounded 14-day search. It never writes a moving `latest` alias. A remote-only
-configuration may omit the snapshot.
+configuration may omit the snapshot. The date determines which versions `"*"`
+CRAN declarations resolve to. To target a specific snapshot, replace the
+generated value with the desired `YYYY-MM-DD` date and run `okr sync` again;
+`okr` will refresh the lockfile and vendored sources for the edited
+configuration.
 
 `r-version` uses R's exact `major.minor.patch` form, such as `4.5.1`. When it
 is set, `okr sync` and `okr status` compare it with the version reported by the

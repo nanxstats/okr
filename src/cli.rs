@@ -156,7 +156,7 @@ fn default_config(snapshot: &str, r_version: Option<&str>) -> String {
         .unwrap_or_default();
     format!(
         r#"[project]
-{r_version}snapshot = "{snapshot}"    # latest available dated snapshot when initialized
+{r_version}snapshot = "{snapshot}"
 strict = false
 
 [vendor]
@@ -1047,7 +1047,7 @@ mod tests {
         let rendered = default_config("2000-02-29", None);
         let config = Config::parse(&rendered).unwrap();
         assert_eq!(config.project.snapshot.as_deref(), Some("2000-02-29"));
-        assert!(!rendered.contains("# snapshot"));
+        assert!(rendered.contains("snapshot = \"2000-02-29\"\n"));
         assert!(!rendered.contains("name ="));
         assert!(!rendered.contains("r-version"));
 

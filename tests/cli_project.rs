@@ -26,7 +26,6 @@ fn init_writes_the_safe_template_and_requires_force_to_replace_it() {
     assert!(template.contains("[packages]"));
     assert!(template.contains("[references]"));
     assert!(template.contains(&format!("snapshot = \"{snapshot}\"")));
-    assert!(!template.contains("# snapshot"));
     assert!(!template.contains("name ="));
     assert!(!template.contains("r-version"));
     assert_eq!(
