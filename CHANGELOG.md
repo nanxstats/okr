@@ -4,6 +4,8 @@
 
 ### Improvements
 
+- Remove the default comment for the `project.snapshot` field from generated
+  `okr.toml`, and document how to select a specific dated snapshot (#40).
 - Remove the unused `project.name` configuration field from `okr.toml`.
   Define `project.r-version` as an optional exact expectation for the project
   harness's R runtime, validate its `major.minor.patch` form, and initialize it
