@@ -4,7 +4,13 @@ icon: lucide/download
 
 # Install
 
-Install the current release from crates.io:
+Install with Homebrew:
+
+```console
+brew install nanxstats/tap/okr
+```
+
+Alternatively, install with Cargo:
 
 ```console
 cargo install okr
@@ -21,7 +27,7 @@ Confirm the installation:
 
 ```console
 $ okr --version
-okr 0.1.2
+okr 0.1.4
 ```
 
 ## Runtime tools

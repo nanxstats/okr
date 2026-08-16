@@ -4,6 +4,7 @@
 
 ### Documentation
 
+- Document installation via Homebrew tap as an alternative to `cargo install` (#44).
 - Remove system requirement discovery and Dockerfile emission from the roadmap.
   Delegate those concerns to renv, pak, and container tooling. Document
   okr's boundary as composable source context artifacts and verification (#43).
