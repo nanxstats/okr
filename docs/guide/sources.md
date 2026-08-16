@@ -127,7 +127,7 @@ requires a new `okr sync`.
 |---|---|
 | `bioc::...` | Planned for milestone 0.2. |
 | `local::...` | Planned for milestone 0.2. |
-| `owner/repo#123` | Pull-request refs are planned for milestone 0.3. |
+| `owner/repo#123` | Pull request refs are planned for milestone 0.2. |
 | `svn::...` | Permanently unsupported; use `git::` or a verified `url::` tarball. |
 
 Profiles, bundles, and transitive resolution are also roadmap features, not

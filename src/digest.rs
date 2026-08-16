@@ -1,4 +1,4 @@
-//! Deterministic file and source-tree digests.
+//! Deterministic file and source tree digests.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

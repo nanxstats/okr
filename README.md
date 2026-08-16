@@ -61,7 +61,11 @@ git. GitHub Enterprise and self-hosted GitLab, Codeberg, SSH, and other
 
 ## Scope
 
-`okr` installs nothing: rig, pak, renv, and rv do that.
+okr focuses on composable source context artifacts and verification.
+okr installs nothing: rig, pak, renv, and rv do that.
+It also does not infer OS packages or generate Dockerfiles.
+Use `renv::sysreqs()` or `pak::pkg_sysreqs()` for system requirements and
+renv's Docker workflow for container construction.
 
 ## License
 

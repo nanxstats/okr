@@ -218,7 +218,7 @@ fn parse_remote_type(kind: &str) -> Result<RemoteType> {
 
 fn reject_deferred(input: &str) -> Result<()> {
     if looks_like_pull_request(input) {
-        return spec_error("pull-request refs (#PR) are planned for milestone 0.3");
+        return spec_error("pull-request refs (#PR) are planned for milestone 0.2");
     }
     Ok(())
 }
@@ -441,7 +441,7 @@ mod tests {
         let cases = [
             ("bioc::BiocGenerics", "milestone 0.2"),
             ("local::../mypkg", "milestone 0.2"),
-            ("owner/repo#123", "milestone 0.3"),
+            ("owner/repo#123", "milestone 0.2"),
             ("svn::https://example.com/repo", "git:: or url::"),
         ];
 

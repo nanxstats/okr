@@ -62,7 +62,7 @@ is a strict failure.
 
 ## CI pattern
 
-A source-context integrity job can be as small as:
+A source context integrity job can be as small as:
 
 ```yaml
 - name: Verify vendored R source context
@@ -88,6 +88,19 @@ okr sync
 okr verify --strict --json
 ```
 
+## Container builds
+
 Deterministic portable bundles are planned for milestone 0.2. In the current
 release, carry the lock, vendor tree, and cache through your own image or
 artifact workflow.
+
+`okr` deliberately does not discover OS system packages or generate a
+Dockerfile. Those decisions belong to the tool that constructs the runnable R
+environment and to the container build itself. Use `renv::sysreqs()` or
+`pak::pkg_sysreqs()` to identify system dependencies, and follow
+renv's Docker workflow for package restoration and image layout.
+
+The okr artifacts remain composable inputs to that Dockerfile: build or copy
+the vendored source context into the image, then run `okr verify` as its
+integrity gate. This keeps container policy outside okr without weakening the
+source context attestation.

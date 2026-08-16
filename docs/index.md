@@ -55,4 +55,8 @@ arbitrary Git hosts, direct tarballs, and reference repositories.
 package dependencies. Use `rig` for R toolchains and `pak`, `renv`, `rv`, or
 `install.packages()` for package installation. `okr` can inspect the installed
 library read-only and report whether its versions agree with the vendored
-sources.
+sources. System requirement discovery and container construction also remain
+with those environment tools: use `renv::sysreqs()` or `pak::pkg_sysreqs()`,
+then follow renv's Docker workflow when building an image.
+okr's lock, vendored tree, manifests, and verification command compose into
+that workflow without owning it.
