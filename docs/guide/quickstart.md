@@ -15,7 +15,9 @@ okr init
 `init` searches backward from the current UTC date for the latest available
 dated Posit (Public) Package Manager CRAN snapshot. It writes that exact date to
 `okr.toml` and caches the successful package index for the first sync. It also
-adds the default `deps-src/` path to `.gitignore`. If `Rscript` is available,
+adds the default `deps-src/` path to `.gitignore`. When `.Rbuildignore` already
+exists, `init` adds anchored rules for the vendor path, `okr.toml`, and
+`okr.lock` so they stay out of R package tarballs. If `Rscript` is available,
 it records the exact detected R version as an advisory `project.r-version`;
 otherwise the optional field is omitted.
 

@@ -87,3 +87,8 @@ The default `.gitignore` entry avoids accidentally committing large generated
 trees. When a sealed evaluation repository intentionally commits the source
 context, set `vendor.gitignore = false` and remove any vendor entry that `init`
 already added to `.gitignore`.
+
+For projects that are themselves R packages, `init` and `sync` also update an
+existing `.Rbuildignore` with anchored, escaped rules for the configured vendor
+path, `okr.toml`, and `okr.lock`. `okr` does not create `.Rbuildignore` in other
+projects.

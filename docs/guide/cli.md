@@ -26,11 +26,13 @@ okr [GLOBAL OPTIONS] <COMMAND>
 
 ### `okr init [--force]`
 
-Creates a default configuration and manages its `.gitignore` entry. It probes
-the current UTC date and up to 13 preceding dates for the first available
-snapshot, caching the successful `PACKAGES.gz` response. When `Rscript` is
-available on `PATH`, `init` records its exact version in `project.r-version`;
-R remains optional, so failed or unavailable detection simply omits the field.
+Creates a default configuration and manages its `.gitignore` entry. When an R
+package already has `.Rbuildignore`, it also adds anchored rules for the vendor
+path, `okr.toml`, and `okr.lock`. It probes the current UTC date and up to 13
+preceding dates for the first available snapshot, caching the successful
+`PACKAGES.gz` response. When `Rscript` is available on `PATH`, `init` records
+its exact version in `project.r-version`; R remains optional, so failed or
+unavailable detection simply omits the field.
 
 `--force` replaces an existing configuration. The displayed `--profile`
 option is reserved for milestone 0.2 and currently returns an instructive

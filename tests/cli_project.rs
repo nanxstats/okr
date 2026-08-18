@@ -16,6 +16,7 @@ fn init_writes_the_safe_template_and_requires_force_to_replace_it() {
     let empty_path = project.path().join("empty-path");
     fs::create_dir(&empty_path).unwrap();
     let snapshot = seed_current_snapshot(&cache);
+    fs::write(project.path().join(".Rbuildignore"), "^README[.]md$\n").unwrap();
 
     okr(project.path(), &cache, &empty_path)
         .arg("init")
@@ -31,6 +32,10 @@ fn init_writes_the_safe_template_and_requires_force_to_replace_it() {
     assert_eq!(
         fs::read_to_string(project.path().join(".gitignore")).unwrap(),
         "/deps-src/\n"
+    );
+    assert_eq!(
+        fs::read_to_string(project.path().join(".Rbuildignore")).unwrap(),
+        "^README[.]md$\n^deps-src$\n^okr\\.toml$\n^okr\\.lock$\n"
     );
     okr(project.path(), &cache, &empty_path)
         .args(["add", "ggsci"])
@@ -60,6 +65,10 @@ fn init_writes_the_safe_template_and_requires_force_to_replace_it() {
     assert_eq!(
         fs::read_to_string(project.path().join(".gitignore")).unwrap(),
         "/deps-src/\n"
+    );
+    assert_eq!(
+        fs::read_to_string(project.path().join(".Rbuildignore")).unwrap(),
+        "^README[.]md$\n^deps-src$\n^okr\\.toml$\n^okr\\.lock$\n"
     );
 
     okr(project.path(), &cache, &empty_path)

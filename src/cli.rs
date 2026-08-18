@@ -14,7 +14,7 @@ use crate::config::{Config, DEFAULT_REPO_URL};
 use crate::fetch::{Cache, Fetcher};
 use crate::hosttools::HostTools;
 use crate::lock::{Lockfile, VerificationReport, config_digest, verify_vendor};
-use crate::manifest::{update_agents_file, update_gitignore, write_manifests};
+use crate::manifest::{update_agents_file, update_gitignore, update_rbuildignore, write_manifests};
 use crate::progress::SyncProgress;
 use crate::resolve::{TieredGithubApi, resolve_with_progress};
 use crate::rlib::{CoherenceReport, CoherenceStatus, Inspection, check_coherence};
@@ -195,6 +195,7 @@ fn run_init(config_path: &Path, args: &InitArgs, quiet: bool) -> Result<()> {
     let config = Config::parse(&contents)?;
     atomic_write_preserving_permissions(config_path, &contents)?;
     update_gitignore(&project, &config)?;
+    update_rbuildignore(&project, &config)?;
     if !quiet {
         println!("wrote {}", config_path.display());
         if let Some(version) = r_version {
@@ -664,6 +665,7 @@ fn run_sync(
     {
         update_agents_file(&project_directory, &config)?;
         update_gitignore(&project_directory, &config)?;
+        update_rbuildignore(&project_directory, &config)?;
         progress.set_phase("Checking installed R library...");
         let inspection_progress = progress.entry("Inspecting", "R library");
         let coherence = check_coherence(lock, &crate::rlib::inspect_in(&project_directory));
@@ -713,6 +715,7 @@ fn run_sync(
     write_manifests(&config, &lock, &vendored)?;
     update_agents_file(&project_directory, &config)?;
     update_gitignore(&project_directory, &config)?;
+    update_rbuildignore(&project_directory, &config)?;
     progress.advance("Wrote manifests");
     progress.set_phase("Checking installed R library...");
     let coherence = check_coherence(&lock, &crate::rlib::inspect_in(&project_directory));

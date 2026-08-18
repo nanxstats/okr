@@ -236,6 +236,43 @@ pub fn update_gitignore(project_directory: &Path, config: &Config) -> Result<()>
     atomic_write_preserving_permissions(&path, &updated)
 }
 
+pub fn update_rbuildignore(project_directory: &Path, config: &Config) -> Result<()> {
+    let path = project_directory.join(".Rbuildignore");
+    if !path.try_exists()? {
+        return Ok(());
+    }
+
+    let existing = fs::read_to_string(&path)?;
+    let vendor_path = normalized_config_path(&config.vendor.path)?;
+    let rules = [
+        rbuildignore_rule(&vendor_path),
+        rbuildignore_rule("okr.toml"),
+        rbuildignore_rule("okr.lock"),
+    ];
+    let missing = rules
+        .into_iter()
+        .filter(|rule| !existing.lines().any(|line| line == rule))
+        .collect::<Vec<_>>();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let newline = if existing.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut updated = existing;
+    if !updated.is_empty() && !updated.ends_with(['\n', '\r']) {
+        updated.push_str(newline);
+    }
+    for rule in missing {
+        updated.push_str(&rule);
+        updated.push_str(newline);
+    }
+    atomic_write_preserving_permissions(&path, &updated)
+}
+
 fn render_markdown(config: &Config, lock: &Lockfile, vendored: &VendorResult) -> Result<String> {
     let vendor_path = normalized_config_path(&config.vendor.path)?;
     let mut markdown = format!(
@@ -308,6 +345,21 @@ fn normalized_config_path(path: &Path) -> Result<String> {
         output.push_str(part);
     }
     Ok(output)
+}
+
+fn rbuildignore_rule(path: &str) -> String {
+    let path = path.trim_end_matches('/');
+    let mut escaped = String::with_capacity(path.len());
+    for character in path.chars() {
+        if matches!(
+            character,
+            '\\' | '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '[' | ']' | '{' | '}' | '|'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(character);
+    }
+    format!("^{escaped}$")
 }
 
 fn agents_block(vendor_path: &str, newline: &str) -> String {
@@ -384,7 +436,9 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{render, update_agents_file, update_gitignore};
+    use super::{
+        rbuildignore_rule, render, update_agents_file, update_gitignore, update_rbuildignore,
+    };
     use crate::config::{Config, EntryKind};
     use crate::digest::TreeDigest;
     use crate::lock::{FetchMethod, LockedPackage, LockedReference, Lockfile};
@@ -523,6 +577,34 @@ mod tests {
         assert_eq!(
             fs::read_to_string(path).unwrap(),
             "/target\n# user comment\n/deps-src/\n"
+        );
+    }
+
+    #[test]
+    fn rbuildignore_rules_are_idempotent_and_preserve_user_lines() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join(".Rbuildignore");
+        fs::write(&path, "^README[.]md$\n").unwrap();
+        let config = Config::parse("[vendor]\npath = \"dep-src\"\n").unwrap();
+
+        update_rbuildignore(directory.path(), &config).unwrap();
+        update_rbuildignore(directory.path(), &config).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(path).unwrap(),
+            "^README[.]md$\n^dep-src$\n^okr\\.toml$\n^okr\\.lock$\n"
+        );
+    }
+
+    #[test]
+    fn rbuildignore_is_not_created_and_rules_escape_regex_metacharacters() {
+        let directory = tempdir().unwrap();
+        update_rbuildignore(directory.path(), &Config::default()).unwrap();
+        assert!(!directory.path().join(".Rbuildignore").exists());
+
+        assert_eq!(
+            rbuildignore_rule("dep.src+/source(1)/"),
+            r"^dep\.src\+/source\(1\)$"
         );
     }
 
