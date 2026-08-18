@@ -543,6 +543,11 @@ By default, `okr` also manages an entry for the vendor path in `.gitignore`.
 Set `vendor.gitignore = false` when the repository should commit the source
 tree. Both choices are valid because `verify` detects drift either way.
 
+When `.Rbuildignore` exists, `okr` also manages anchored, escaped regular
+expression entries for the configured vendor path, `okr.toml`, and `okr.lock`.
+It does not create `.Rbuildignore`, because an `okr` project need not itself be
+an R package.
+
 ## 13. Configure the project with `okr.toml`
 
 ```toml

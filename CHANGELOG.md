@@ -2,6 +2,12 @@
 
 ## okr (development version)
 
+### Improvements
+
+- `okr init` now adds anchored, escaped rules to existing `.Rbuildignore`
+  to keep the vendored source tree, `okr.toml`, and `okr.lock` out of
+  R package tarballs (#50).
+
 ### Documentation
 
 - Document installation via Homebrew tap as an alternative to `cargo install` (#44).
