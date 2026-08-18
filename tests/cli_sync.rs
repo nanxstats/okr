@@ -16,6 +16,8 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
     let empty_path = project.path().join("empty-path");
     fs::create_dir(&empty_path).unwrap();
     write_cran_config(project.path());
+    let rbuildignore = project.path().join(".Rbuildignore");
+    fs::write(&rbuildignore, "^README[.]md$\n").unwrap();
 
     okr(project.path(), &cache, &empty_path)
         .arg("sync")
@@ -35,6 +37,12 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
     assert!(!lock_text.contains(".files]"));
     assert_eq!(manifest["schema"], 1);
     assert!(manifest["entries"][0].get("files").is_none());
+    assert_eq!(
+        fs::read_to_string(&rbuildignore).unwrap(),
+        "^README[.]md$\n^deps-src$\n^okr\\.toml$\n^okr\\.lock$\n"
+    );
+
+    fs::write(&rbuildignore, "^README[.]md$\n").unwrap();
 
     okr(project.path(), &cache, &empty_path)
         .arg("sync")
@@ -42,6 +50,10 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
         .success()
         .stdout(predicate::str::contains("already synchronized; no changes"))
         .stdout(predicate::str::contains("sha256:").not());
+    assert_eq!(
+        fs::read_to_string(&rbuildignore).unwrap(),
+        "^README[.]md$\n^deps-src$\n^okr\\.toml$\n^okr\\.lock$\n"
+    );
 
     okr(project.path(), &cache, &empty_path)
         .args(["--verbose", "sync"])
