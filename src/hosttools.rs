@@ -56,7 +56,7 @@ impl HostTools {
         let Ok(shell) = Shell::new() else {
             return false;
         };
-        cmd!(shell, "gh auth status").quiet().run().is_ok()
+        cmd!(shell, "gh auth status").quiet().output().is_ok()
     }
 
     pub fn git_ls_remote(&self, url: &str, reference: Option<&str>) -> Result<ResolvedGitRef> {
@@ -98,12 +98,17 @@ impl HostTools {
         let shell = Shell::new().map_err(shell_error)?;
         let output = cmd!(shell, "gh api {endpoint} --jq {field}")
             .quiet()
-            .read()
+            .output()
             .map_err(|error| {
                 Error::Fetch(format!(
                     "gh api failed for `{endpoint}`; check `gh auth status`: {error}"
                 ))
             })?;
+        let output = String::from_utf8(output.stdout).map_err(|error| {
+            Error::Fetch(format!(
+                "gh api returned non-UTF-8 output for `{endpoint}`: {error}"
+            ))
+        })?;
         let output = output.trim();
         if output.is_empty() {
             return Err(Error::Fetch(format!(

@@ -1,5 +1,13 @@
 # Changelog
 
+## okr 0.1.6
+
+### Improvements
+
+- Explain when `@*release` cannot find a published GitHub release, including
+  how to use a repository that has only Git tags, without printing the `gh`
+  authentication probe or every failed API tier (#53).
+
 ## okr 0.1.5
 
 ### Improvements

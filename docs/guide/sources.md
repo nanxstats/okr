@@ -50,11 +50,15 @@ resolution.
 GitHub alone also supports `@*release`:
 
 ```console
-okr add r-lib/testthat@*release
+okr add r-lib/testthat@\*release
 ```
 
 The latest release tag is resolved through authenticated `gh`,
 `GITHUB_TOKEN`, or anonymous GitHub API access, then frozen to its commit.
+
+Note that this selects the latest GitHub release, not the newest standalone
+Git tag. For a repository that publishes tags without releases,
+name the tag explicitly, for example `owner/repo@v1.2.3`.
 
 ## Arbitrary Git hosts
 

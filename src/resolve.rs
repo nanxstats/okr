@@ -214,6 +214,55 @@ pub struct TieredGithubApi<'a> {
     client: Client,
 }
 
+#[derive(Debug)]
+enum GithubHttpError {
+    NotFound { url: String },
+    Other(Error),
+}
+
+impl GithubHttpError {
+    fn into_fetch_error(self) -> Error {
+        match self {
+            Self::NotFound { url } => Error::Fetch(format!(
+                "GitHub API request failed for {url}: HTTP 404 Not Found"
+            )),
+            Self::Other(error) => error,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum GithubReleaseHttpError {
+    NoLatestRelease,
+    Other(Error),
+}
+
+fn classify_release_http_error(error: GithubHttpError) -> GithubReleaseHttpError {
+    match error {
+        GithubHttpError::NotFound { .. } => GithubReleaseHttpError::NoLatestRelease,
+        other => GithubReleaseHttpError::Other(other.into_fetch_error()),
+    }
+}
+
+fn github_http_status_error(url: &str, status: StatusCode) -> Option<GithubHttpError> {
+    if status == StatusCode::NOT_FOUND {
+        Some(GithubHttpError::NotFound {
+            url: url.to_owned(),
+        })
+    } else if status == StatusCode::FORBIDDEN {
+        Some(GithubHttpError::Other(Error::Fetch(
+            "GitHub API returned HTTP 403; install `gh` and run `gh auth login`, or set GITHUB_TOKEN"
+                .into(),
+        )))
+    } else if status.is_success() {
+        None
+    } else {
+        Some(GithubHttpError::Other(Error::Fetch(format!(
+            "GitHub API request failed for {url}: HTTP {status}"
+        ))))
+    }
+}
+
 impl<'a> TieredGithubApi<'a> {
     pub fn new(tools: &'a HostTools) -> Result<Self> {
         let client = Client::builder()
@@ -238,25 +287,32 @@ impl<'a> TieredGithubApi<'a> {
         })
     }
 
-    fn via_http(&self, owner: &str, repo: &str, token: Option<&str>) -> Result<GithubRelease> {
+    fn via_http(
+        &self,
+        owner: &str,
+        repo: &str,
+        token: Option<&str>,
+    ) -> std::result::Result<GithubRelease, GithubReleaseHttpError> {
         let host = configured_github_host();
         let base = if host == "github.com" {
             "https://api.github.com".to_owned()
         } else {
             format!("https://{host}/api/v3")
         };
-        let release: ReleaseResponse = self.get_json(
-            &format!("{base}/repos/{owner}/{repo}/releases/latest"),
-            token,
-        )?;
-        let commit: CommitResponse = self.get_json(
-            &format!(
-                "{base}/repos/{owner}/{repo}/commits/{}",
-                encode_path_segment(&release.tag_name)
-            ),
-            token,
-        )?;
-        validate_api_commit(&commit.sha)?;
+        let release_url = format!("{base}/repos/{owner}/{repo}/releases/latest");
+        let release: ReleaseResponse = self
+            .get_json(&release_url, token)
+            .map_err(classify_release_http_error)?;
+        let commit: CommitResponse = self
+            .get_json(
+                &format!(
+                    "{base}/repos/{owner}/{repo}/commits/{}",
+                    encode_path_segment(&release.tag_name)
+                ),
+                token,
+            )
+            .map_err(|error| GithubReleaseHttpError::Other(error.into_fetch_error()))?;
+        validate_api_commit(&commit.sha).map_err(GithubReleaseHttpError::Other)?;
         Ok(GithubRelease {
             tag: release.tag_name,
             commit: commit.sha.to_ascii_lowercase(),
@@ -268,7 +324,11 @@ impl<'a> TieredGithubApi<'a> {
         })
     }
 
-    fn get_json<T: DeserializeOwned>(&self, url: &str, token: Option<&str>) -> Result<T> {
+    fn get_json<T: DeserializeOwned>(
+        &self,
+        url: &str,
+        token: Option<&str>,
+    ) -> std::result::Result<T, GithubHttpError> {
         let mut request = self
             .client
             .get(url)
@@ -277,22 +337,17 @@ impl<'a> TieredGithubApi<'a> {
             request = request.bearer_auth(token);
         }
         let response = request.send().map_err(|error| {
-            Error::Fetch(format!("GitHub API request failed for {url}: {error}"))
+            GithubHttpError::Other(Error::Fetch(format!(
+                "GitHub API request failed for {url}: {error}"
+            )))
         })?;
-        if response.status() == StatusCode::FORBIDDEN {
-            return Err(Error::Fetch(
-                "GitHub API returned HTTP 403; install `gh` and run `gh auth login`, or set GITHUB_TOKEN"
-                    .into(),
-            ));
-        }
-        if !response.status().is_success() {
-            return Err(Error::Fetch(format!(
-                "GitHub API request failed for {url}: HTTP {}",
-                response.status()
-            )));
+        if let Some(error) = github_http_status_error(url, response.status()) {
+            return Err(error);
         }
         response.json().map_err(|error| {
-            Error::Fetch(format!("invalid GitHub API response from {url}: {error}"))
+            GithubHttpError::Other(Error::Fetch(format!(
+                "invalid GitHub API response from {url}: {error}"
+            )))
         })
     }
 }
@@ -312,21 +367,35 @@ impl GithubReleaseApi for TieredGithubApi<'_> {
         {
             match self.via_http(owner, repo, Some(&token)) {
                 Ok(release) => return Ok(release),
-                Err(error) => failures.push(format!("token REST: {error}")),
+                Err(GithubReleaseHttpError::NoLatestRelease) => {
+                    return Err(no_latest_github_release_error(owner, repo));
+                }
+                Err(GithubReleaseHttpError::Other(error)) => {
+                    failures.push(format!("token REST: {error}"));
+                }
             }
         }
-        self.via_http(owner, repo, None).map_err(|error| {
-            if failures.is_empty() {
-                error
-            } else {
+        match self.via_http(owner, repo, None) {
+            Ok(release) => Ok(release),
+            Err(GithubReleaseHttpError::NoLatestRelease) => {
+                Err(no_latest_github_release_error(owner, repo))
+            }
+            Err(GithubReleaseHttpError::Other(error)) if failures.is_empty() => Err(error),
+            Err(GithubReleaseHttpError::Other(error)) => {
                 failures.push(format!("anonymous REST: {error}"));
-                Error::Fetch(format!(
+                Err(Error::Fetch(format!(
                     "GitHub release lookup exhausted all available tiers: {}",
                     failures.join("; ")
-                ))
+                )))
             }
-        })
+        }
     }
+}
+
+fn no_latest_github_release_error(owner: &str, repo: &str) -> Error {
+    Error::Fetch(format!(
+        "no latest GitHub Release was found for `{owner}/{repo}`. `@*release` selects a published GitHub Release, not the newest Git tag. If this repository publishes tags only, edit its `okr.toml` declaration to pin a tag explicitly (for example, `{owner}/{repo}@v1.2.3`), or remove `@*release` to resolve the default branch. Otherwise, check the repository name and your GitHub access."
+    ))
 }
 
 #[derive(serde::Deserialize)]
@@ -932,9 +1001,10 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{
-        GithubApiMethod, GithubRelease, GithubReleaseApi, GithubRepository, ResolvedSource,
-        SnapshotIndex, archive_for, compare_package_versions, encode_path_segment, resolve,
-        resolve_public_forge_ref, split_git_host_path,
+        GithubApiMethod, GithubHttpError, GithubRelease, GithubReleaseApi, GithubReleaseHttpError,
+        GithubRepository, ResolvedSource, SnapshotIndex, archive_for, classify_release_http_error,
+        compare_package_versions, encode_path_segment, github_http_status_error,
+        no_latest_github_release_error, resolve, resolve_public_forge_ref, split_git_host_path,
     };
     use crate::config::Config;
     use crate::fetch::{Cache, Fetcher};
@@ -1076,6 +1146,31 @@ mod tests {
             }
             source => panic!("unexpected source: {source:?}"),
         }
+    }
+
+    #[test]
+    fn latest_release_not_found_explains_that_git_tags_are_distinct() {
+        let url = "https://api.github.com/repos/python-openxml/python-docx/releases/latest";
+        let response_error = github_http_status_error(url, reqwest::StatusCode::NOT_FOUND).unwrap();
+
+        assert!(matches!(
+            &response_error,
+            GithubHttpError::NotFound { url: found } if found == url
+        ));
+        let classified = classify_release_http_error(response_error);
+        assert!(matches!(
+            classified,
+            GithubReleaseHttpError::NoLatestRelease
+        ));
+
+        let error = no_latest_github_release_error("python-openxml", "python-docx");
+        assert_eq!(error.exit_code(), 3);
+        let message = error.to_string();
+        assert!(message.contains("no latest GitHub Release was found"));
+        assert!(message.contains("not the newest Git tag"));
+        assert!(message.contains("python-openxml/python-docx@v1.2.3"));
+        assert!(message.contains("remove `@*release`"));
+        assert!(!message.contains("exhausted all available tiers"));
     }
 
     #[test]
