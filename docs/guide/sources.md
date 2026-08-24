@@ -89,9 +89,11 @@ internalpkg = {
 }
 ```
 
-This digest is checked before the artifact is committed to the cache. The
-archive must contain one top-level directory and safe regular-file entries.
-Symlinks, special files, absolute paths, and path traversal are rejected.
+This digest is checked before the artifact is committed to the cache.
+The archive must contain one top-level directory and safe entries.
+Symbolic links are materialized as regular files containing their exact
+link-target bytes. Hard links, special files, absolute paths, and
+path traversal are rejected.
 
 ## Packages and references
 

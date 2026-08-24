@@ -72,9 +72,11 @@ a ref.
 
 ## Safe extraction and replacement
 
-Archives must contain regular files below one safe top-level directory. Absolute
-paths, `..` traversal, links, and special files are rejected. PAX global
-metadata records are ignored when detecting the archive's top-level directory.
+Archives must contain entries below one safe top-level directory.
+Absolute paths, `..` traversal, hard links, and special files are rejected.
+Symbolic links from archives and clones are materialized as regular files
+containing their exact link-target bytes. PAX global metadata records are
+ignored when detecting the archive's top-level directory.
 
 The extracted tree is pruned according to its package or reference kind, then
 written through a sibling temporary directory and renamed into place. A failed
