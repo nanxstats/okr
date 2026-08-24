@@ -39,9 +39,10 @@ relative/path<TAB>sha256-of-exact-file-bytes
 ```
 
 The records are joined with LF and no trailing newline, then hashed again with
-SHA-256. The resulting `tree-digest` covers all source bytes exposed to the
-agent. Symlinks and non-files are rejected rather than assigned
-platform-dependent behavior.
+SHA-256. The resulting `tree-digest` covers all source bytes exposed to the agent.
+Archive and clone symbolic links are normalized to regular files containing
+their link-target bytes before the inventory is built. Symlinks introduced
+later and other non-files are rejected rather than hashed.
 
 Only the aggregate digest is serialized. Per-file hashes are internal inputs,
 so lockfiles and manifests remain compact as source trees grow. A verification
