@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
 use assert_cmd::cargo::cargo_bin_cmd;
@@ -139,7 +140,7 @@ fn coherence_warns_by_default_and_is_fatal_only_when_strict() {
 }
 
 #[test]
-fn file_git_reference_rebuilds_offline_from_the_normalized_clone_cache() {
+fn file_git_reference_with_a_source_link_rebuilds_offline_from_the_normalized_clone_cache() {
     if !host_git() {
         return;
     }
@@ -147,6 +148,9 @@ fn file_git_reference_rebuilds_offline_from_the_normalized_clone_cache() {
     let cache = project.path().join("cache");
     let repository = project.path().join("reference-repository");
     copy_tree(&fixture_path("reference-repo"), &repository);
+    fs::create_dir_all(repository.join("xDir/pkg")).unwrap();
+    fs::write(repository.join("xDir/pkg/context.txt"), "linked context\n").unwrap();
+    symlink("xDir/pkg", repository.join("linked-context")).unwrap();
     let shell = Shell::new().unwrap();
     cmd!(shell, "git init -q -b main {repository}")
         .run()
@@ -182,6 +186,14 @@ fn file_git_reference_rebuilds_offline_from_the_normalized_clone_cache() {
     let first_lock = fs::read(project.path().join("okr.lock")).unwrap();
     let first_manifest = fs::read(project.path().join("deps-src/_manifest.json")).unwrap();
     let first_markdown = fs::read(project.path().join("deps-src/_manifest.md")).unwrap();
+    let source_link = project.path().join("deps-src/standards/linked-context");
+    assert!(
+        fs::symlink_metadata(&source_link)
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    assert_eq!(fs::read(&source_link).unwrap(), b"xDir/pkg");
     fs::remove_dir_all(project.path().join("deps-src")).unwrap();
     fs::remove_dir_all(&repository).unwrap();
     let empty_path = project.path().join("empty-path");
@@ -209,6 +221,14 @@ fn file_git_reference_rebuilds_offline_from_the_normalized_clone_cache() {
             .join("deps-src/standards/docs/guide.md")
             .is_file()
     );
+    let source_link = project.path().join("deps-src/standards/linked-context");
+    assert!(
+        fs::symlink_metadata(&source_link)
+            .unwrap()
+            .file_type()
+            .is_file()
+    );
+    assert_eq!(fs::read(source_link).unwrap(), b"xDir/pkg");
 }
 
 #[test]

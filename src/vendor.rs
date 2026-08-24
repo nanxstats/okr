@@ -501,7 +501,7 @@ fn extract_tarball(archive_path: &Path, destination: &Path) -> Result<()> {
         let output = destination.join(&relative);
         if entry_type.is_dir() {
             fs::create_dir_all(output)?;
-        } else if entry_type.is_file() {
+        } else if entry_type.is_file() || entry_type.is_symlink() {
             if !files.insert(relative.clone()) {
                 return Err(Error::Io(io::Error::new(
                     io::ErrorKind::InvalidData,
@@ -511,8 +511,18 @@ fn extract_tarball(archive_path: &Path, destination: &Path) -> Result<()> {
             if let Some(parent) = output.parent() {
                 fs::create_dir_all(parent)?;
             }
-            let mut file = File::create(output)?;
-            io::copy(&mut entry, &mut file)?;
+            if entry_type.is_file() {
+                let mut file = File::create(output)?;
+                io::copy(&mut entry, &mut file)?;
+            } else {
+                let target = entry.link_name_bytes().ok_or_else(|| {
+                    Error::Io(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("symbolic link has no target at {}", path.display()),
+                    ))
+                })?;
+                fs::write(output, target.as_ref())?;
+            }
         } else {
             return Err(Error::Io(io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -557,6 +567,11 @@ fn build_excludes(
 }
 
 fn copy_pruned(source: &Path, destination: &Path, excludes: &GlobSet) -> Result<()> {
+    enum SourceContent {
+        File(PathBuf),
+        SymbolicLink(Vec<u8>),
+    }
+
     fs::create_dir_all(destination)?;
     let mut paths = Vec::new();
     for entry in WalkDir::new(source).follow_links(false) {
@@ -564,7 +579,16 @@ fn copy_pruned(source: &Path, destination: &Path, excludes: &GlobSet) -> Result<
         if entry.path() == source || entry.file_type().is_dir() {
             continue;
         }
-        if !entry.file_type().is_file() {
+        let relative = entry
+            .path()
+            .strip_prefix(source)
+            .map_err(|error| Error::Io(io::Error::new(io::ErrorKind::InvalidData, error)))?;
+        let normalized = normalized_path(relative)?;
+        let content = if entry.file_type().is_file() {
+            SourceContent::File(entry.path().to_owned())
+        } else if entry.file_type().is_symlink() {
+            SourceContent::SymbolicLink(symbolic_link_bytes(entry.path())?)
+        } else {
             return Err(Error::Io(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!(
@@ -572,15 +596,11 @@ fn copy_pruned(source: &Path, destination: &Path, excludes: &GlobSet) -> Result<
                     entry.path().display()
                 ),
             )));
-        }
-        let relative = entry
-            .path()
-            .strip_prefix(source)
-            .map_err(|error| Error::Io(io::Error::new(io::ErrorKind::InvalidData, error)))?;
-        paths.push((normalized_path(relative)?, entry.path().to_owned()));
+        };
+        paths.push((normalized, content));
     }
     paths.sort_by(|left, right| left.0.cmp(&right.0));
-    for (relative, source_file) in paths {
+    for (relative, content) in paths {
         if excludes.is_match(&relative) {
             continue;
         }
@@ -590,9 +610,36 @@ fn copy_pruned(source: &Path, destination: &Path, excludes: &GlobSet) -> Result<
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::copy(source_file, target)?;
+        match content {
+            SourceContent::File(source_file) => {
+                fs::copy(source_file, target)?;
+            }
+            SourceContent::SymbolicLink(link_target) => fs::write(target, link_target)?,
+        }
     }
     Ok(())
+}
+
+fn symbolic_link_bytes(path: &Path) -> Result<Vec<u8>> {
+    let target = fs::read_link(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt as _;
+        Ok(target.as_os_str().as_bytes().to_vec())
+    }
+    #[cfg(not(unix))]
+    {
+        let target = target.to_str().ok_or_else(|| {
+            Error::Io(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "symbolic link target is not valid UTF-8 at {}",
+                    path.display()
+                ),
+            ))
+        })?;
+        Ok(target.as_bytes().to_vec())
+    }
 }
 
 fn normalized_path(path: &Path) -> Result<String> {
@@ -811,10 +858,10 @@ mod tests {
     use xshell::{Shell, cmd};
 
     use super::{
-        detect_reference_license, extract_tarball, github_api_tarball_url, metadata,
-        reference_title, vendor,
+        build_excludes, copy_pruned, detect_reference_license, extract_tarball,
+        github_api_tarball_url, metadata, reference_title, vendor,
     };
-    use crate::config::Config;
+    use crate::config::{Config, EntryKind};
     use crate::fetch::{Cache, Fetcher};
     use crate::hosttools::HostTools;
     use crate::lock::FetchMethod;
@@ -981,6 +1028,70 @@ mod tests {
             description
         );
         assert!(!extracted.join("pax_global_header").exists());
+    }
+
+    #[test]
+    fn extraction_materializes_symbolic_links_as_regular_files() {
+        let directory = tempdir().unwrap();
+        let archive_path = directory.path().join("reference-archive.tar.gz");
+        let file = fs::File::create(&archive_path).unwrap();
+        let gzip = GzEncoder::new(file, Compression::default());
+        let mut archive = tar::Builder::new(gzip);
+
+        let contents = b"Package: pkgA\n";
+        let mut file_header = tar::Header::new_gnu();
+        file_header.set_entry_type(tar::EntryType::file());
+        file_header.set_mode(0o644);
+        file_header.set_size(contents.len() as u64);
+        file_header.set_cksum();
+        archive
+            .append_data(
+                &mut file_header,
+                "source/tests/Pkgs/xDir/pkg/DESCRIPTION",
+                &contents[..],
+            )
+            .unwrap();
+
+        let mut link_header = tar::Header::new_gnu();
+        link_header.set_entry_type(tar::EntryType::Symlink);
+        link_header.set_mode(0o777);
+        link_header.set_size(0);
+        archive
+            .append_link(&mut link_header, "source/tests/Pkgs/pkgA", "xDir/pkg")
+            .unwrap();
+        archive.into_inner().unwrap().finish().unwrap();
+
+        let extracted = directory.path().join("extracted");
+        fs::create_dir(&extracted).unwrap();
+        extract_tarball(&archive_path, &extracted).unwrap();
+
+        let link = extracted.join("tests/Pkgs/pkgA");
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_file());
+        assert_eq!(fs::read(link).unwrap(), b"xDir/pkg");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn pruning_materializes_clone_symbolic_links_as_regular_files() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempdir().unwrap();
+        let source = directory.path().join("source");
+        let destination = directory.path().join("destination");
+        fs::create_dir_all(source.join("tests/Pkgs/xDir/pkg")).unwrap();
+        fs::write(
+            source.join("tests/Pkgs/xDir/pkg/DESCRIPTION"),
+            b"Package: pkgA\n",
+        )
+        .unwrap();
+        symlink("xDir/pkg", source.join("tests/Pkgs/pkgA")).unwrap();
+
+        let excludes = build_excludes(EntryKind::Reference, true, &[]).unwrap();
+        copy_pruned(&source, &destination, &excludes).unwrap();
+
+        let link = destination.join("tests/Pkgs/pkgA");
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_file());
+        assert_eq!(fs::read(link).unwrap(), b"xDir/pkg");
     }
 
     #[test]
