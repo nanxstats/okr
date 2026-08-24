@@ -352,8 +352,10 @@ Each resolved entry follows the same pipeline:
    a temporary file followed by rename. A clone-produced source is cached after
    pruning as a normalized gzip tarball so it can also be replayed offline.
 2. **Extract safely.** Extract into a temporary directory and remove the single
-   archive wrapper directory. Reject absolute paths, `..` traversal, symlinks,
-   and entries that are not regular files or directories.
+   archive wrapper directory. Reject absolute paths, `..` traversal, hard links,
+   and special entries. Materialize symbolic links as regular files containing
+   their exact link-target bytes; never create filesystem links from untrusted
+   source archives.
 3. **Prune by kind.** Apply case-insensitive default globs, then merge the
    entry's `exclude` globs.
 4. **Replace atomically.** Write `deps-src/{name}/` through a sibling temporary
@@ -393,7 +395,9 @@ relative/path<TAB>file-sha256
 
 Paths are UTF-8, use `/` separators, and are sorted. Records are joined with LF
 and have no trailing newline. Hashing this inventory with SHA-256 produces the
-entry's `tree-digest`. Symlinks and other non-file entries are rejected rather
+entry's `tree-digest`. Archive and clone symbolic links are normalized to
+regular files containing their link-target bytes before this inventory is
+built. Symlinks introduced later and other non-file entries are rejected rather
 than hashed.
 
 Clone-produced cache archives use sorted paths, zero mtimes and ownership, and

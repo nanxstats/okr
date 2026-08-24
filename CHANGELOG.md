@@ -1,5 +1,13 @@
 # Changelog
 
+## okr (development version)
+
+### Bug fixes
+
+- Allow Git repositories to contain symbolic links by safely materializing
+  each link as a regular file containing its exact target bytes, consistently
+  across forge archives, git clones, and offline cache replay (#56).
+
 ## okr 0.1.6
 
 ### Improvements
