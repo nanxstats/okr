@@ -38,6 +38,7 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
     assert!(!lock_text.contains(".files]"));
     assert_eq!(manifest["schema"], 1);
     assert!(manifest["entries"][0].get("files").is_none());
+    assert!(!project.path().join("AGENTS.md").exists());
     assert_eq!(
         fs::read_to_string(&rbuildignore).unwrap(),
         "^README[.]md$\n^deps-src$\n^okr\\.toml$\n^okr\\.lock$\n"
@@ -51,6 +52,7 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
         .success()
         .stdout(predicate::str::contains("already synchronized; no changes"))
         .stdout(predicate::str::contains("sha256:").not());
+    assert!(!project.path().join("AGENTS.md").exists());
     assert_eq!(
         fs::read_to_string(&rbuildignore).unwrap(),
         "^README[.]md$\n^deps-src$\n^okr\\.toml$\n^okr\\.lock$\n"

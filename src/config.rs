@@ -132,16 +132,10 @@ impl Default for VendorConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct ManifestConfig {
     pub agents_file: bool,
-}
-
-impl Default for ManifestConfig {
-    fn default() -> Self {
-        Self { agents_file: true }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -473,7 +467,7 @@ protocol-templates = {{ git = "https://codeberg.org/org/protocols.git", ref = "m
         assert_eq!(parsed.vendor.path.to_string_lossy(), "deps-src");
         assert!(parsed.vendor.include_tests);
         assert!(parsed.vendor.gitignore);
-        assert!(parsed.manifest.agents_file);
+        assert!(!parsed.manifest.agents_file);
         assert!(!parsed.project.strict);
     }
 

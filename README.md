@@ -39,7 +39,9 @@ so a bare CRAN package can be added immediately. It checks from the current UTC
 date backward and keeps the successful package index in the download cache.
 
 `okr sync` writes `okr.lock`, `deps-src/_manifest.json`, and
-`deps-src/_manifest.md`. Repeating it with an intact tree is a no-op.
+`deps-src/_manifest.md`. Repeating it with an intact tree is a no-op. It leaves
+`AGENTS.md` under project control by default; set `manifest.agents-file = true`
+to opt in to a small marker-delimited pointer to the source manifest.
 
 ## Evaluation workflow
 

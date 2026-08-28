@@ -166,7 +166,7 @@ exclude = []
 gitignore = true
 
 [manifest]
-agents-file = true
+agents-file = false
 
 [packages]
 
@@ -1053,6 +1053,8 @@ mod tests {
         assert!(rendered.contains("snapshot = \"2000-02-29\"\n"));
         assert!(!rendered.contains("name ="));
         assert!(!rendered.contains("r-version"));
+        assert!(!config.manifest.agents_file);
+        assert!(rendered.contains("agents-file = false\n"));
 
         let rendered = default_config("2000-02-29", Some("4.5.2"));
         let config = Config::parse(&rendered).unwrap();

@@ -55,8 +55,11 @@ The result includes:
 - `okr.lock`, the resolved versions, commits, acquisition methods, and digests;
 - `deps-src/`, the pruned source trees;
 - `deps-src/_manifest.md` and `_manifest.json`, indexes for people, agents, and
-  evaluation harnesses; and
-- a managed marker block in `AGENTS.md` that tells coding agents where to look.
+  evaluation harnesses.
+
+Point coding agents to `deps-src/_manifest.md` in the task prompt when they need
+the vendored context. Projects that prefer persistent automatic discovery can
+opt in to a managed marker block in `AGENTS.md`.
 
 Continue with the [quick start](guide/quickstart.md), then see
 [source declarations](guide/sources.md) for CRAN, GitHub, GitLab, Bitbucket,

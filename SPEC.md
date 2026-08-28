@@ -541,7 +541,9 @@ verified by hash.
 ```
 
 Only text between the markers may be replaced. If `AGENTS.md` does not exist,
-`okr` creates it.
+`okr` creates it. This integration is disabled by default so `okr sync` does
+not modify a project's coding agent instructions unless the project explicitly
+opts in.
 
 By default, `okr` also manages an entry for the vendor path in `.gitignore`.
 Set `vendor.gitignore = false` when the repository should commit the source
@@ -569,7 +571,7 @@ exclude = []                         # extra globs added to the kind defaults (Â
 gitignore = true                     # manage the vendor path in .gitignore
 
 [manifest]
-agents-file = true                   # maintain the managed block in AGENTS.md
+agents-file = false                  # opt in to a managed block in AGENTS.md
 
 [packages]
 rpact = "*"                          # snapshot version

@@ -56,9 +56,13 @@ Optional metadata is represented as `null`. Evaluation harnesses should check
 `schema` before consuming entries and use `okr verify --json` as the integrity
 gate rather than trusting a manifest in isolation.
 
-## Automatic `AGENTS.md` discovery
+## Optional `AGENTS.md` discovery
 
-With `manifest.agents-file = true`, sync creates or updates this block:
+`okr` leaves project-specific coding agent instructions alone by default.
+A prompt can point the agent directly to `deps-src/_manifest.md`, as shown above.
+
+For projects that want a persistent discovery instruction, setting
+`manifest.agents-file = true` makes sync create or update this block:
 
 ```markdown
 <!-- okr:begin -->
@@ -70,8 +74,10 @@ verified by hash.
 ```
 
 Only the marker-delimited block is managed. Project-specific instructions
-before and after it remain untouched. Malformed or duplicate marker pairs are a
-configuration error rather than an invitation to rewrite the file.
+before and after it remain untouched. Malformed or duplicate marker pairs are
+a configuration error rather than an invitation to rewrite the file.
+Disabling the option stops future edits; it does not remove a block that was
+previously created.
 
 ## Read-only means generated
 

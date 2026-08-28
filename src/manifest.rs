@@ -537,26 +537,28 @@ mod tests {
     fn agents_marker_update_preserves_everything_outside_the_block() {
         let directory = tempdir().unwrap();
         let path = directory.path().join("AGENTS.md");
+        let config = Config::parse("[manifest]\nagents-file = true\n").unwrap();
         fs::write(
             &path,
             "User preface\n\n<!-- okr:begin -->\nold generated text\n<!-- okr:end -->\n\nUser suffix\n",
         )
         .unwrap();
-        update_agents_file(directory.path(), &Config::default()).unwrap();
+        update_agents_file(directory.path(), &config).unwrap();
         let updated = fs::read_to_string(&path).unwrap();
         assert!(updated.starts_with("User preface\n\n<!-- okr:begin -->"));
         assert!(updated.ends_with("<!-- okr:end -->\n\nUser suffix\n"));
         assert!(updated.contains("`deps-src/_manifest.md`"));
 
         let once = updated.clone();
-        update_agents_file(directory.path(), &Config::default()).unwrap();
+        update_agents_file(directory.path(), &config).unwrap();
         assert_eq!(fs::read_to_string(path).unwrap(), once);
     }
 
     #[test]
     fn agents_file_is_created_and_malformed_markers_are_rejected() {
         let directory = tempdir().unwrap();
-        update_agents_file(directory.path(), &Config::default()).unwrap();
+        let config = Config::parse("[manifest]\nagents-file = true\n").unwrap();
+        update_agents_file(directory.path(), &config).unwrap();
         let path = directory.path().join("AGENTS.md");
         assert!(
             fs::read_to_string(&path)
@@ -564,7 +566,7 @@ mod tests {
                 .contains("<!-- okr:begin -->")
         );
         fs::write(&path, "<!-- okr:begin -->\nmissing end\n").unwrap();
-        assert!(update_agents_file(directory.path(), &Config::default()).is_err());
+        assert!(update_agents_file(directory.path(), &config).is_err());
     }
 
     #[test]
@@ -614,9 +616,14 @@ mod tests {
         let config =
             Config::parse("[vendor]\ngitignore = false\n[manifest]\nagents-file = false\n")
                 .unwrap();
+        let agents_path = directory.path().join("AGENTS.md");
+        fs::write(&agents_path, "Project-owned instructions\n").unwrap();
         update_agents_file(directory.path(), &config).unwrap();
         update_gitignore(directory.path(), &config).unwrap();
-        assert!(!directory.path().join("AGENTS.md").exists());
+        assert_eq!(
+            fs::read_to_string(agents_path).unwrap(),
+            "Project-owned instructions\n"
+        );
         assert!(!directory.path().join(".gitignore").exists());
     }
 }

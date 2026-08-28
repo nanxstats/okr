@@ -68,10 +68,12 @@ deps-src/
 └── protocols/
 ```
 
-The generated `AGENTS.md` marker points coding agents to the manifest and tells
-them to treat these sources as read-only. Re-running `okr sync` with unchanged
-configuration and an intact tree takes the verification fast path and reports
-that the project is already synchronized.
+When asking a coding agent to use the vendored context, point it to
+`deps-src/_manifest.md` and tell it to treat the source tree as read-only. To
+persist that pointer in `AGENTS.md`, explicitly set
+`manifest.agents-file = true`; it is disabled by default. Re-running `okr sync`
+with unchanged configuration and an intact tree takes the verification fast
+path and reports that the project is already synchronized.
 
 ## Inspect and verify
 
