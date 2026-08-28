@@ -6,7 +6,7 @@
 
 - Avoid editing `AGENTS.md` by default. The managed okr marker block remains
   available by explicitly setting `manifest.agents-file = true` in `okr.toml`.
-  Existing configurations that already opt in keep their current behavior.
+  Existing configurations that already opt in keep their current behavior (#60).
 
 ## okr 0.1.7
 
