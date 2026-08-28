@@ -27,6 +27,7 @@ fn init_writes_the_safe_template_and_requires_force_to_replace_it() {
     assert!(template.contains("[packages]"));
     assert!(template.contains("[references]"));
     assert!(template.contains(&format!("snapshot = \"{snapshot}\"")));
+    assert!(template.contains("agents-file = false"));
     assert!(!template.contains("name ="));
     assert!(!template.contains("r-version"));
     assert_eq!(
@@ -45,6 +46,7 @@ fn init_writes_the_safe_template_and_requires_force_to_replace_it() {
     let added = fs::read_to_string(project.path().join("okr.toml")).unwrap();
     let parsed = okr::config::Config::parse(&added).unwrap();
     assert_eq!(parsed.project.snapshot.as_deref(), Some(snapshot.as_str()));
+    assert!(!parsed.manifest.agents_file);
     assert!(parsed.packages.contains_key("ggsci"));
 
     okr(project.path(), &cache, &empty_path)
