@@ -29,7 +29,7 @@ agents can inspect.
 | `deps-src/<name>/` | Pruned source trees agents actually read | `okr sync` |
 | `deps-src/_manifest.md` | Compact human and agent index | `okr sync` |
 | `deps-src/_manifest.json` | Schema-versioned integration surface | `okr sync` |
-| `AGENTS.md` marker | Automatic discovery instructions | `okr sync` |
+| Optional `AGENTS.md` marker | Persistent discovery instructions when explicitly enabled | `okr sync` |
 
 The configured vendor path can replace `deps-src`, but it must remain a safe
 relative path below the project.

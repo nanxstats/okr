@@ -28,7 +28,7 @@ exclude = []
 gitignore = true
 
 [manifest]
-agents-file = true
+agents-file = false
 
 [packages]
 rpact = "*"
@@ -95,10 +95,18 @@ existing entry. The lockfile still makes tree drift detectable.
 
 ## Manifest settings
 
-`agents-file = true` maintains an `okr` marker block in `AGENTS.md`. Only text
+| Key | Default | Meaning |
+|---|---|---|
+| `agents-file` | `false` | Opt in to a managed pointer to the source manifest in `AGENTS.md`. |
+
+By default, `okr` leaves `AGENTS.md` entirely under project control. Set
+`agents-file = true` to maintain an `okr` marker block in that file. Only text
 between `<!-- okr:begin -->` and `<!-- okr:end -->` is replaced; existing
-instructions outside the block are preserved. Setting it to `false` disables
-future updates.
+instructions outside the block are preserved.
+
+Setting the option back to `false` disables future updates but does not remove
+an existing block. Remove the block once after disabling it if it is no longer
+wanted.
 
 ## Entry values
 
