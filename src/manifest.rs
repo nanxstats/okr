@@ -17,6 +17,12 @@ use crate::{Error, Result};
 pub const AGENTS_BEGIN: &str = "<!-- okr:begin -->";
 pub const AGENTS_END: &str = "<!-- okr:end -->";
 
+/// The `_manifest.json` schema version this release writes.
+///
+/// Schema 1 carried an `artifact_digest` per entry; schema 2 keeps only the
+/// aggregate `tree_digest` that `okr verify` recomputes.
+pub const MANIFEST_SCHEMA: u32 = 2;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManifestOutput {
     pub json: String,
@@ -41,7 +47,6 @@ struct JsonEntry {
     path: String,
     title: Option<String>,
     tree_digest: String,
-    artifact_digest: String,
 }
 
 pub fn render(config: &Config, lock: &Lockfile, vendored: &VendorResult) -> Result<ManifestOutput> {
@@ -63,7 +68,6 @@ pub fn render(config: &Config, lock: &Lockfile, vendored: &VendorResult) -> Resu
             path: format!("{vendor_path}/{}", package.name),
             title,
             tree_digest: package.tree_digest.clone(),
-            artifact_digest: package.artifact_digest.clone(),
         });
     }
     for reference in &lock.references {
@@ -82,13 +86,12 @@ pub fn render(config: &Config, lock: &Lockfile, vendored: &VendorResult) -> Resu
             path: format!("{vendor_path}/{}", reference.name),
             title,
             tree_digest: reference.tree_digest.clone(),
-            artifact_digest: reference.artifact_digest.clone(),
         });
     }
     entries.sort_by(|left, right| (left.kind, &left.name).cmp(&(right.kind, &right.name)));
 
     let manifest = JsonManifest {
-        schema: 1,
+        schema: MANIFEST_SCHEMA,
         environment_digest: lock.environment_digest.clone(),
         entries,
     };
@@ -136,11 +139,6 @@ pub(crate) fn render_for_verification(
                 .get("Title")
                 .map(|title| title.split_whitespace().collect::<Vec<_>>().join(" ")),
             fetch_method: package.fetch_method,
-            artifact_sha256: package
-                .artifact_digest
-                .strip_prefix("sha256:")
-                .unwrap_or(&package.artifact_digest)
-                .to_owned(),
             tree: TreeDigest {
                 digest: package.tree_digest.clone(),
                 files: Default::default(),
@@ -156,11 +154,6 @@ pub(crate) fn render_for_verification(
             license: reference.license.clone(),
             title,
             fetch_method: reference.fetch_method,
-            artifact_sha256: reference
-                .artifact_digest
-                .strip_prefix("sha256:")
-                .unwrap_or(&reference.artifact_digest)
-                .to_owned(),
             tree: TreeDigest {
                 digest: reference.tree_digest.clone(),
                 files: Default::default(),
@@ -441,13 +434,13 @@ mod tests {
     };
     use crate::config::{Config, EntryKind};
     use crate::digest::TreeDigest;
-    use crate::lock::{FetchMethod, LockedPackage, LockedReference, Lockfile};
+    use crate::lock::{FetchMethod, LOCK_VERSION, LockedPackage, LockedReference, Lockfile};
     use crate::vendor::{VendorResult, VendoredEntry};
 
     fn fixture() -> (Config, Lockfile, VendorResult) {
         let config = Config::default();
         let lock = Lockfile {
-            version: 1,
+            version: LOCK_VERSION,
             okr_version: "0.1.0".into(),
             generated: "2026-06-30T00:00:00Z".into(),
             snapshot: Some("2026-06-30".into()),
@@ -461,7 +454,6 @@ mod tests {
                 reference: None,
                 commit: None,
                 fetch_method: FetchMethod::Tarball,
-                artifact_digest: format!("sha256:{}", "c".repeat(64)),
                 tree_digest: format!("sha256:{}", "d".repeat(64)),
                 license: Some("MIT".into()),
             }],
@@ -472,7 +464,6 @@ mod tests {
                 reference: Some("main".into()),
                 commit: Some("f".repeat(40)),
                 fetch_method: FetchMethod::GitClone,
-                artifact_digest: format!("sha256:{}", "1".repeat(64)),
                 tree_digest: format!("sha256:{}", "2".repeat(64)),
                 license: Some("Apache-2.0".into()),
             }],
@@ -488,7 +479,6 @@ mod tests {
                     license: Some("MIT".into()),
                     title: Some("First Tiny Fixture Package".into()),
                     fetch_method: FetchMethod::Tarball,
-                    artifact_sha256: "c".repeat(64),
                     tree: TreeDigest {
                         digest: format!("sha256:{}", "d".repeat(64)),
                         files: BTreeMap::new(),
@@ -501,7 +491,6 @@ mod tests {
                     license: Some("Apache-2.0".into()),
                     title: None,
                     fetch_method: FetchMethod::GitClone,
-                    artifact_sha256: "1".repeat(64),
                     tree: TreeDigest {
                         digest: format!("sha256:{}", "2".repeat(64)),
                         files: BTreeMap::new(),

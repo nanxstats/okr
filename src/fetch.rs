@@ -287,6 +287,12 @@ impl Fetcher {
             })
     }
 
+    /// Return the artifact previously fetched from `url` when the cache still
+    /// holds it. This never touches the network.
+    pub fn cached_url(&self, url: &str) -> Result<Option<CachedArtifact>> {
+        self.cache.lookup(&url_key(url))
+    }
+
     /// Fetch an artifact, returning `None` only when the server reports that
     /// the URL does not exist. Successful responses use the normal verified
     /// content-addressed cache.
@@ -296,7 +302,7 @@ impl Fetcher {
         expected_sha256: Option<&str>,
         label: &str,
     ) -> Result<Option<CachedArtifact>> {
-        let key = format!("url:{url}");
+        let key = url_key(url);
         if let Some(expected) = expected_sha256
             && let Some(hit) = self.cache.get(expected)?
         {
@@ -345,25 +351,10 @@ impl Fetcher {
         &self,
         url: &str,
         token: &str,
-        expected_sha256: Option<&str>,
         label: &str,
     ) -> Result<CachedArtifact> {
-        let key = format!("url:{url}");
-        if let Some(expected) = expected_sha256
-            && let Some(hit) = self.cache.get(expected)?
-        {
-            return Ok(hit);
-        }
+        let key = url_key(url);
         if let Some(hit) = self.cache.lookup(&key)? {
-            if let Some(expected) = expected_sha256
-                && hit.sha256 != normalize_digest(expected)?
-            {
-                return Err(Error::Fetch(format!(
-                    "cached {label} has SHA-256 {}, expected {}",
-                    hit.sha256,
-                    normalize_digest(expected)?
-                )));
-            }
             return Ok(hit);
         }
         if self.offline {
@@ -386,7 +377,7 @@ impl Fetcher {
                 response.status()
             )));
         }
-        self.cache_response(&key, response, expected_sha256, label)
+        self.cache_response(&key, response, None, label)
     }
 
     pub fn get_json<T: DeserializeOwned>(&self, url: &str, label: &str) -> Result<T> {
@@ -434,6 +425,10 @@ impl Fetcher {
         }
         result
     }
+}
+
+fn url_key(url: &str) -> String {
+    format!("url:{url}")
 }
 
 fn normalize_digest(digest: &str) -> Result<&str> {

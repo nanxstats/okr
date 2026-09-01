@@ -3,7 +3,7 @@ source: src/manifest.rs
 expression: "render(&config, &lock, &vendored).unwrap().json"
 ---
 {
-  "schema": 1,
+  "schema": 2,
   "environment_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "entries": [
     {
@@ -15,8 +15,7 @@ expression: "render(&config, &lock, &vendored).unwrap().json"
       "license": "MIT",
       "path": "deps-src/tinyone",
       "title": "First Tiny Fixture Package",
-      "tree_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
-      "artifact_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      "tree_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
     },
     {
       "kind": "reference",
@@ -27,8 +26,7 @@ expression: "render(&config, &lock, &vendored).unwrap().json"
       "license": "Apache-2.0",
       "path": "deps-src/standards",
       "title": null,
-      "tree_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-      "artifact_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      "tree_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     }
   ]
 }
