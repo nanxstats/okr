@@ -33,7 +33,7 @@ integrity fields. Its top-level shape is:
 
 ```json
 {
-  "schema": 1,
+  "schema": 2,
   "environment_digest": "sha256:...",
   "entries": [
     {
@@ -45,8 +45,7 @@ integrity fields. Its top-level shape is:
       "license": "Apache License (>= 2)",
       "path": "deps-src/admiral",
       "title": "...",
-      "tree_digest": "sha256:...",
-      "artifact_digest": "sha256:..."
+      "tree_digest": "sha256:..."
     }
   ]
 }
@@ -54,7 +53,9 @@ integrity fields. Its top-level shape is:
 
 Optional metadata is represented as `null`. Evaluation harnesses should check
 `schema` before consuming entries and use `okr verify --json` as the integrity
-gate rather than trusting a manifest in isolation.
+gate rather than trusting a manifest in isolation. Schema 1 also carried an
+`artifact_digest` per entry; schema 2 keeps only the tree digest that
+`okr verify` recomputes.
 
 ## Optional `AGENTS.md` discovery
 

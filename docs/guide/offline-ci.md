@@ -15,9 +15,10 @@ export OKR_CACHE_DIR=/srv/okr-cache
 okr sync
 ```
 
-The cache stores downloaded archives by SHA-256. A source acquired by cloning
-is pruned and converted to a normalized archive so it can also be replayed
-offline. Cache hits are rehashed before use.
+The cache stores downloaded archives by SHA-256 and indexes them by source, so
+a locked entry is replayed through its recorded fetch method. A source acquired
+by cloning is pruned and converted to a normalized archive so it can also be
+replayed offline. Cache hits are rehashed before use.
 
 Keep `okr.toml`, `okr.lock`, and the cache together when preparing an offline
 environment. The prior lock supplies frozen commits for remote declarations;
@@ -35,7 +36,9 @@ missing lock resolution or cache artifact is a fetch failure with exit code 3
 and an error naming what must first be acquired online.
 
 The vendor directory itself may be removed before the offline sync if the lock
-and all required cached artifacts remain available.
+and all required cached artifacts remain available. The rebuilt tree must
+reproduce every tree digest in the lock; a difference is reported as a fetch
+error naming the entry.
 
 ## Verify an existing tree
 

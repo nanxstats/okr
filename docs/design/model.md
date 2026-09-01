@@ -40,14 +40,16 @@ relative path below the project.
 
 1. Parse and validate the strict configuration.
 2. Resolve CRAN versions and remote refs to exact sources.
-3. Acquire verified archives or clone through the user's host tools.
+3. Acquire archives into the content-addressed cache or clone through the
+   user's host tools.
 4. Extract safely, prune by entry kind, and atomically replace the vendor tree.
-5. Hash the resulting files, write the lock and manifests, then inspect the R
-   library read-only when `Rscript` is available.
+5. Hash the resulting files, check them against a fresh lock, write the lock
+   and manifests, then inspect the R library read-only when `Rscript` is
+   available.
 
 Repeating this workflow with an unchanged configuration and intact tree takes a
-verification fast path. Rebuilding from the same locked artifacts produces the
-same normalized metadata and tree digests.
+verification fast path. Rebuilding from the same locked sources must reproduce
+the same normalized metadata and tree digests.
 
 ## Two entry kinds
 

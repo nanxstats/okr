@@ -57,8 +57,10 @@ network and clone operations and requires prior lock resolutions and cache
 hits. `--strict` upgrades installed-library mismatches to exit code 4.
 
 An unchanged configuration with an intact vendor tree uses a digest-based
-no-op path. Interactive terminals show progress; redirected, quiet, and
-non-interactive output remains line-oriented.
+no-op path. When the lock is fresh but an entry must be rebuilt, the rebuilt
+tree must reproduce the locked tree digest. A lock written in an older format
+is regenerated with a warning. Interactive terminals show progress;
+redirected, quiet, and non-interactive output remains line-oriented.
 
 ### `okr status [--json]`
 
