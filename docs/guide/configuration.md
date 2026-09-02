@@ -120,7 +120,7 @@ optional keys:
 | Key | Meaning |
 |---|---|
 | `ref` | Branch, tag, or commit, when not already present in `spec`. |
-| `sha256` | Required 64-character artifact digest for `url` sources; invalid for other sources. |
+| `sha256` | Required 64-character SHA-256 of the downloaded archive for `url` sources; invalid for other sources. |
 | `exclude` | Extra case-insensitive globs for this entry. |
 | `include-tests` | Per-package override of `vendor.include-tests`. |
 

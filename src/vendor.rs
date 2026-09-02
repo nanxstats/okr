@@ -50,7 +50,6 @@ pub struct VendoredEntry {
     pub license: Option<String>,
     pub title: Option<String>,
     pub fetch_method: FetchMethod,
-    pub artifact_sha256: String,
     pub tree: TreeDigest,
 }
 
@@ -147,7 +146,7 @@ fn vendor_entry(
     warnings: &mut Vec<String>,
 ) -> Result<VendoredEntry> {
     let acquisition = acquire(temporary_parent, entry, fetcher, tools, warnings)?;
-    let (raw, tarball) = match acquisition {
+    let (raw, tarball_method) = match acquisition {
         Acquisition::Tarball { artifact, method } => {
             let raw = TempBuilder::new()
                 .prefix(".okr-extract-")
@@ -159,7 +158,7 @@ fn vendor_entry(
                     artifact.path.display()
                 ))
             })?;
-            (raw, Some((artifact, method)))
+            (raw, Some(method))
         }
         Acquisition::Clone { directory } => (directory, None),
     };
@@ -172,20 +171,21 @@ fn vendor_entry(
 
     let (version, license, title) = metadata(entry, destination)?;
     let tree = tree_digest(destination)?;
-    let (fetch_method, artifact_sha256) = match tarball {
-        Some((artifact, method)) => (method, artifact.sha256),
+    if let Some(expected) = &entry.expected_tree_digest
+        && tree.digest != *expected
+    {
+        return Err(Error::Fetch(format!(
+            "source tree for {} does not match okr.lock: expected {expected}, found {}; the locked source changed upstream. If that is intended, delete okr.lock and run `okr sync` again",
+            entry.name, tree.digest
+        )));
+    }
+    let fetch_method = match tarball_method {
+        Some(method) => method,
         None => {
-            let key = clone_cache_key(entry);
-            let artifact = fetcher.cache().put_normalized_tree(&key, destination)?;
-            if let Some(expected) = &entry.artifact_sha256
-                && artifact.sha256 != *expected
-            {
-                return Err(Error::Fetch(format!(
-                    "normalized clone artifact for {} changed: expected {expected}, found {}",
-                    entry.name, artifact.sha256
-                )));
-            }
-            (FetchMethod::GitClone, artifact.sha256)
+            fetcher
+                .cache()
+                .put_normalized_tree(&clone_cache_key(entry), destination)?;
+            FetchMethod::GitClone
         }
     };
 
@@ -196,7 +196,6 @@ fn vendor_entry(
         license,
         title,
         fetch_method,
-        artifact_sha256,
         tree,
     })
 }
@@ -222,7 +221,7 @@ fn acquire(
         ResolvedSource::Cran { url, .. } | ResolvedSource::Tarball { url, .. } => {
             let artifact = fetcher.fetch_url(
                 url,
-                entry.artifact_sha256.as_deref(),
+                entry.declared_sha256.as_deref(),
                 &format!("source for {}", entry.name),
             )?;
             Ok(Acquisition::Tarball {
@@ -265,19 +264,10 @@ fn acquire_git(
     archive_url: Option<&str>,
     github: Option<&GithubRepository>,
 ) -> Result<Acquisition> {
-    if let (Some(method), Some(digest)) = (
-        entry.preferred_fetch_method,
-        entry.artifact_sha256.as_deref(),
-    ) {
-        if let Some(artifact) = fetcher.cache().get(digest)? {
-            return Ok(Acquisition::Tarball { artifact, method });
-        }
-        if fetcher.is_offline() {
-            return Err(Error::Fetch(format!(
-                "offline mode: missing cached artifact {digest} for {}",
-                entry.name
-            )));
-        }
+    // Replay the locked fetch method. Each method has its own cache key, so a
+    // cached artifact is found without a digest and offline rebuilds never
+    // switch methods.
+    if let Some(method) = entry.preferred_fetch_method {
         match method {
             FetchMethod::ForgeTarball => {
                 let url = archive_url.ok_or_else(|| {
@@ -286,7 +276,8 @@ fn acquire_git(
                         entry.name
                     ))
                 })?;
-                let artifact = fetcher.fetch_url(url, Some(digest), &entry.name)?;
+                let artifact =
+                    fetcher.fetch_url(url, None, &format!("forge archive for {}", entry.name))?;
                 return Ok(Acquisition::Tarball { artifact, method });
             }
             FetchMethod::Gh => {
@@ -296,11 +287,28 @@ fn acquire_git(
                         entry.name
                     ))
                 })?;
-                let artifact =
-                    acquire_github_api_tarball(fetcher, tools, github, commit, Some(digest))?;
+                if let Some(artifact) = cached_github_api_tarball(fetcher, github, commit)? {
+                    return Ok(Acquisition::Tarball { artifact, method });
+                }
+                if fetcher.is_offline() {
+                    return Err(Error::Fetch(format!(
+                        "offline mode: missing cached GitHub archive for {}",
+                        entry.name
+                    )));
+                }
+                let artifact = acquire_github_api_tarball(fetcher, tools, github, commit)?;
                 return Ok(Acquisition::Tarball { artifact, method });
             }
             FetchMethod::GitClone => {
+                if let Some(artifact) = fetcher.cache().lookup(&clone_cache_key(entry))? {
+                    return Ok(Acquisition::Tarball { artifact, method });
+                }
+                if fetcher.is_offline() {
+                    return Err(Error::Fetch(format!(
+                        "offline mode: missing cached clone archive for {}",
+                        entry.name
+                    )));
+                }
                 return clone_source(temporary_parent, tools, clone_url, locked_ref, commit);
             }
             FetchMethod::Tarball => {
@@ -335,7 +343,7 @@ fn acquire_git(
     }
 
     if let Some(github) = github {
-        match acquire_github_api_tarball(fetcher, tools, github, commit, None) {
+        match acquire_github_api_tarball(fetcher, tools, github, commit) {
             Ok(artifact) => {
                 return Ok(Acquisition::Tarball {
                     artifact,
@@ -352,18 +360,36 @@ fn acquire_git(
     clone_source(temporary_parent, tools, clone_url, locked_ref, commit)
 }
 
+fn gh_tarball_endpoint(github: &GithubRepository, commit: &str) -> String {
+    format!("repos/{}/{}/tarball/{commit}", github.owner, github.repo)
+}
+
 fn acquire_with_gh(
     fetcher: &Fetcher,
     tools: &HostTools,
     github: &GithubRepository,
     commit: &str,
-    expected_sha256: Option<&str>,
 ) -> Result<CachedArtifact> {
-    let endpoint = format!("repos/{}/{}/tarball/{commit}", github.owner, github.repo);
+    let endpoint = gh_tarball_endpoint(github, commit);
     let bytes = tools.gh_api_bytes(&endpoint)?;
     fetcher
         .cache()
-        .put_bytes(&format!("gh:{endpoint}"), &bytes, expected_sha256)
+        .put_bytes(&format!("gh:{endpoint}"), &bytes, None)
+}
+
+/// Find a GitHub API archive for this commit cached by any access tier.
+fn cached_github_api_tarball(
+    fetcher: &Fetcher,
+    github: &GithubRepository,
+    commit: &str,
+) -> Result<Option<CachedArtifact>> {
+    if let Some(artifact) = fetcher
+        .cache()
+        .lookup(&format!("gh:{}", gh_tarball_endpoint(github, commit)))?
+    {
+        return Ok(Some(artifact));
+    }
+    fetcher.cached_url(&github_api_tarball_url(github, commit))
 }
 
 fn acquire_github_api_tarball(
@@ -371,11 +397,10 @@ fn acquire_github_api_tarball(
     tools: &HostTools,
     github: &GithubRepository,
     commit: &str,
-    expected_sha256: Option<&str>,
 ) -> Result<CachedArtifact> {
     let mut failures = Vec::new();
     if tools.gh_authenticated() {
-        match acquire_with_gh(fetcher, tools, github, commit, expected_sha256) {
+        match acquire_with_gh(fetcher, tools, github, commit) {
             Ok(artifact) => return Ok(artifact),
             Err(error) => failures.push(format!("gh: {error}")),
         }
@@ -388,7 +413,6 @@ fn acquire_github_api_tarball(
         match fetcher.fetch_url_with_bearer(
             &url,
             &token,
-            expected_sha256,
             &format!("GitHub API archive {}/{}", github.owner, github.repo),
         ) {
             Ok(artifact) => return Ok(artifact),
@@ -398,7 +422,7 @@ fn acquire_github_api_tarball(
     fetcher
         .fetch_url(
             &url,
-            expected_sha256,
+            None,
             &format!(
                 "anonymous GitHub API archive {}/{}",
                 github.owner, github.repo
@@ -932,7 +956,8 @@ mod tests {
             },
             exclude: Vec::new(),
             include_tests: None,
-            artifact_sha256: None,
+            declared_sha256: None,
+            expected_tree_digest: None,
             preferred_fetch_method: None,
         };
 
@@ -962,7 +987,8 @@ mod tests {
                 },
                 exclude: Vec::new(),
                 include_tests: None,
-                artifact_sha256: None,
+                declared_sha256: None,
+                expected_tree_digest: None,
                 preferred_fetch_method: None,
             }],
             warnings: Vec::new(),
@@ -1142,7 +1168,8 @@ mod tests {
             },
             exclude: Vec::new(),
             include_tests: None,
-            artifact_sha256: None,
+            declared_sha256: None,
+            expected_tree_digest: None,
             preferred_fetch_method: None,
         };
         let cache = Cache::new(project.path().join("cache"));
@@ -1166,7 +1193,7 @@ mod tests {
         assert_eq!(online.entries[0].fetch_method, FetchMethod::GitClone);
 
         let mut offline_entry = entry;
-        offline_entry.artifact_sha256 = Some(online.entries[0].artifact_sha256.clone());
+        offline_entry.expected_tree_digest = Some(online.entries[0].tree.digest.clone());
         offline_entry.preferred_fetch_method = Some(FetchMethod::GitClone);
         let offline = vendor(
             project.path(),
@@ -1204,7 +1231,8 @@ mod tests {
                 },
                 exclude: Vec::new(),
                 include_tests: None,
-                artifact_sha256: None,
+                declared_sha256: None,
+                expected_tree_digest: None,
                 preferred_fetch_method: None,
             }],
             warnings: Vec::new(),
@@ -1229,6 +1257,74 @@ mod tests {
     }
 
     #[test]
+    fn rebuilt_tree_must_reproduce_the_locked_tree_digest() {
+        let project = tempdir().unwrap();
+        let fixture = fixture_path("fixture-repo/2026-06-30/src/contrib/tinyone_1.0.0.tar.gz");
+        let config =
+            Config::parse("[project]\nsnapshot = \"2026-06-30\"\n[packages]\ntinyone = \"*\"")
+                .unwrap();
+        let entry = ResolvedEntry {
+            name: "tinyone".into(),
+            kind: crate::config::EntryKind::Package,
+            source: ResolvedSource::Cran {
+                version: "1.0.0".into(),
+                url: format!("file://{}", fixture.display()),
+            },
+            exclude: Vec::new(),
+            include_tests: None,
+            declared_sha256: None,
+            expected_tree_digest: Some(format!("sha256:{}", "0".repeat(64))),
+            preferred_fetch_method: Some(FetchMethod::Tarball),
+        };
+        let resolution = |entry: ResolvedEntry| Resolution {
+            entries: vec![entry],
+            warnings: Vec::new(),
+        };
+        let cache = Cache::new(project.path().join("cache"));
+        let online = Fetcher::new(cache.clone(), false).unwrap();
+
+        let error = vendor(
+            project.path(),
+            &config,
+            &resolution(entry.clone()),
+            &online,
+            &HostTools::new(),
+        )
+        .unwrap_err();
+        assert_eq!(error.exit_code(), 3);
+        assert!(
+            error
+                .to_string()
+                .contains("source tree for tinyone does not match okr.lock"),
+            "{error}"
+        );
+        assert!(!project.path().join("deps-src").exists());
+
+        let mut unlocked = entry.clone();
+        unlocked.expected_tree_digest = None;
+        let first = vendor(
+            project.path(),
+            &config,
+            &resolution(unlocked),
+            &online,
+            &HostTools::new(),
+        )
+        .unwrap();
+
+        let mut replay = entry;
+        replay.expected_tree_digest = Some(first.entries[0].tree.digest.clone());
+        let offline = vendor(
+            project.path(),
+            &config,
+            &resolution(replay),
+            &Fetcher::new(cache, true).unwrap(),
+            &HostTools::new(),
+        )
+        .unwrap();
+        assert_eq!(offline.entries[0].tree, first.entries[0].tree);
+    }
+
+    #[test]
     fn public_forge_archive_path_does_not_invoke_git() {
         let project = tempdir().unwrap();
         let fixture = fixture_path("forge/package-archive.tar.gz");
@@ -1248,7 +1344,8 @@ mod tests {
                 },
                 exclude: Vec::new(),
                 include_tests: None,
-                artifact_sha256: None,
+                declared_sha256: None,
+                expected_tree_digest: None,
                 preferred_fetch_method: None,
             }],
             warnings: Vec::new(),

@@ -13,6 +13,12 @@ use crate::resolve::{Resolution, ResolvedEntry, ResolvedSource};
 use crate::vendor::{VendorResult, VendoredEntry};
 use crate::{Error, Result};
 
+/// The `okr.lock` format version this release reads and writes.
+///
+/// Version 1 recorded an `artifact-digest` per entry. Version 2 attests each
+/// entry with its aggregate `tree-digest` only.
+pub const LOCK_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Lockfile {
@@ -43,7 +49,6 @@ pub struct LockedPackage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
     pub fetch_method: FetchMethod,
-    pub artifact_digest: String,
     pub tree_digest: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
@@ -62,7 +67,6 @@ pub struct LockedReference {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
     pub fetch_method: FetchMethod,
-    pub artifact_digest: String,
     pub tree_digest: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
@@ -110,7 +114,7 @@ impl Lockfile {
             .then(|| config.project.snapshot.clone())
             .flatten();
         let mut lock = Self {
-            version: 1,
+            version: LOCK_VERSION,
             okr_version: env!("CARGO_PKG_VERSION").into(),
             generated: deterministic_generated(snapshot.as_deref()),
             snapshot,
@@ -124,12 +128,14 @@ impl Lockfile {
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let contents = fs::read_to_string(path).map_err(|error| {
-            Error::Config(format!(
-                "could not read lockfile {}: {error}",
-                path.display()
-            ))
-        })?;
+        let contents = read_lock(path)?;
+        if let Some(version) = outdated_version(&contents) {
+            return Err(Error::Config(format!(
+                "{} uses lock version {version}, but okr {} reads and writes version {LOCK_VERSION}; run `okr sync` to regenerate it",
+                path.display(),
+                env!("CARGO_PKG_VERSION")
+            )));
+        }
         let lock: Self = toml::from_str(&contents)
             .map_err(|error| Error::Config(format!("invalid {}: {error}", path.display())))?;
         lock.validate_digests()
@@ -143,6 +149,17 @@ impl Lockfile {
         } else {
             Ok(None)
         }
+    }
+
+    /// Report the version of an existing lock written in an older format.
+    ///
+    /// `sync` uses this to regenerate such a lock instead of failing on it.
+    /// A missing lock, or one in the current format, yields `None`.
+    pub fn outdated_version(path: &Path) -> Result<Option<u32>> {
+        if !path.try_exists()? {
+            return Ok(None);
+        }
+        Ok(outdated_version(&read_lock(path)?))
     }
 
     pub fn to_stable_toml(&self) -> Result<String> {
@@ -203,19 +220,11 @@ impl Lockfile {
         validate_sha256_digest("environment-digest", &self.environment_digest)?;
         for package in &self.packages {
             validate_sha256_digest(
-                &format!("package.{}.artifact-digest", package.name),
-                &package.artifact_digest,
-            )?;
-            validate_sha256_digest(
                 &format!("package.{}.tree-digest", package.name),
                 &package.tree_digest,
             )?;
         }
         for reference in &self.references {
-            validate_sha256_digest(
-                &format!("reference.{}.artifact-digest", reference.name),
-                &reference.artifact_digest,
-            )?;
             validate_sha256_digest(
                 &format!("reference.{}.tree-digest", reference.name),
                 &reference.tree_digest,
@@ -234,6 +243,28 @@ impl Lockfile {
                 .windows(2)
                 .all(|pair| pair[0].name <= pair[1].name)
     }
+}
+
+fn read_lock(path: &Path) -> Result<String> {
+    fs::read_to_string(path).map_err(|error| {
+        Error::Config(format!(
+            "could not read lockfile {}: {error}",
+            path.display()
+        ))
+    })
+}
+
+/// Read only the `version` key so a lock in an older format is recognized
+/// before its entries are parsed against the current schema.
+fn outdated_version(contents: &str) -> Option<u32> {
+    #[derive(Deserialize)]
+    struct Header {
+        version: u32,
+    }
+    toml::from_str::<Header>(contents)
+        .ok()
+        .map(|header| header.version)
+        .filter(|version| *version != LOCK_VERSION)
 }
 
 fn validate_sha256_digest(field: &str, digest: &str) -> std::result::Result<(), String> {
@@ -276,7 +307,6 @@ fn lock_package(resolved: &ResolvedEntry, tree: &VendoredEntry) -> Result<Locked
         reference,
         commit,
         fetch_method: tree.fetch_method,
-        artifact_digest: format!("sha256:{}", tree.artifact_sha256),
         tree_digest: tree.tree.digest.clone(),
         license: tree.license.clone(),
     })
@@ -291,7 +321,6 @@ fn lock_reference(resolved: &ResolvedEntry, tree: &VendoredEntry) -> LockedRefer
         reference,
         commit,
         fetch_method: tree.fetch_method,
-        artifact_digest: format!("sha256:{}", tree.artifact_sha256),
         tree_digest: tree.tree.digest.clone(),
         license: tree.license.clone(),
     }
@@ -373,11 +402,11 @@ pub fn verify_vendor(
     lock: &Lockfile,
 ) -> VerificationReport {
     let mut mismatches = Vec::new();
-    if lock.version != 1 {
+    if lock.version != LOCK_VERSION {
         mismatches.push(lock_mismatch(
             "version",
             MismatchKind::LockSchema,
-            Some("1".into()),
+            Some(LOCK_VERSION.to_string()),
             Some(lock.version.to_string()),
         ));
     }
@@ -658,12 +687,14 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use super::{FetchMethod, LockedPackage, LockedReference, Lockfile, config_digest};
+    use super::{
+        FetchMethod, LOCK_VERSION, LockedPackage, LockedReference, Lockfile, config_digest,
+    };
     use crate::config::Config;
 
     fn example_lock() -> Lockfile {
         Lockfile {
-            version: 1,
+            version: LOCK_VERSION,
             okr_version: "0.1.0".into(),
             generated: "2026-06-30T00:00:00Z".into(),
             snapshot: Some("2026-06-30".into()),
@@ -677,7 +708,6 @@ mod tests {
                 reference: None,
                 commit: None,
                 fetch_method: FetchMethod::Tarball,
-                artifact_digest: format!("sha256:{}", "c".repeat(64)),
                 tree_digest: format!("sha256:{}", "d".repeat(64)),
                 license: Some("LGPL-2.1".into()),
             }],
@@ -688,7 +718,6 @@ mod tests {
                 reference: Some("main".into()),
                 commit: Some("e".repeat(40)),
                 fetch_method: FetchMethod::GitClone,
-                artifact_digest: format!("sha256:{}", "f".repeat(64)),
                 tree_digest: format!("sha256:{}", "0".repeat(64)),
                 license: None,
             }],
@@ -731,12 +760,44 @@ mod tests {
         let encoded = toml::to_string(&example_lock()).unwrap();
         fs::write(
             &path,
-            encoded.replacen(&format!("sha256:{}", "c".repeat(64)), &"C".repeat(64), 1),
+            encoded.replacen(&format!("sha256:{}", "d".repeat(64)), &"D".repeat(64), 1),
         )
         .unwrap();
         let error = Lockfile::load(&path).unwrap_err();
-        assert!(error.to_string().contains("package.rpact.artifact-digest"));
+        assert!(error.to_string().contains("package.rpact.tree-digest"));
         assert!(error.to_string().contains("sha256:<64 lowercase hex"));
+    }
+
+    #[test]
+    fn load_explains_an_outdated_lock_version_and_sync_can_detect_it() {
+        let directory = tempdir().unwrap();
+        let path = directory.path().join("okr.lock");
+        assert_eq!(Lockfile::outdated_version(&path).unwrap(), None);
+
+        let current = example_lock().to_stable_toml().unwrap();
+        fs::write(&path, &current).unwrap();
+        assert_eq!(Lockfile::outdated_version(&path).unwrap(), None);
+        assert!(Lockfile::load(&path).is_ok());
+
+        let legacy = current
+            .replacen(&format!("version = {LOCK_VERSION}"), "version = 1", 1)
+            .replacen(
+                "fetch-method = \"tarball\"\n",
+                &format!(
+                    "fetch-method = \"tarball\"\nartifact-digest = \"sha256:{}\"\n",
+                    "c".repeat(64)
+                ),
+                1,
+            );
+        fs::write(&path, legacy).unwrap();
+        assert_eq!(Lockfile::outdated_version(&path).unwrap(), Some(1));
+        let error = Lockfile::load(&path).unwrap_err().to_string();
+        assert!(error.contains("uses lock version 1"), "{error}");
+        assert!(
+            error.contains(&format!("writes version {LOCK_VERSION}")),
+            "{error}"
+        );
+        assert!(error.contains("run `okr sync`"), "{error}");
     }
 
     #[test]
@@ -779,7 +840,7 @@ mod tests {
         fs::write(package.join("R/code.R"), b"value <- 1\n").unwrap();
         let tree = crate::digest::tree_digest(&package).unwrap();
         let mut lock = Lockfile {
-            version: 1,
+            version: LOCK_VERSION,
             okr_version: "0.1.0".into(),
             generated: "1970-01-01T00:00:00Z".into(),
             snapshot: None,
@@ -793,7 +854,6 @@ mod tests {
                 reference: Some("v1".into()),
                 commit: Some("2".repeat(40)),
                 fetch_method: FetchMethod::ForgeTarball,
-                artifact_digest: format!("sha256:{}", "3".repeat(64)),
                 tree_digest: tree.digest,
                 license: Some("MIT".into()),
             }],
@@ -874,7 +934,11 @@ mod tests {
     #[test]
     fn lock_unknown_keys_are_rejected() {
         let encoded = toml::to_string(&example_lock()).unwrap();
-        let malformed = encoded.replacen("version = 1", "version = 1\ntyop = true", 1);
+        let malformed = encoded.replacen(
+            &format!("version = {LOCK_VERSION}"),
+            &format!("version = {LOCK_VERSION}\ntyop = true"),
+            1,
+        );
         let error = toml::from_str::<Lockfile>(&malformed).unwrap_err();
         assert!(error.to_string().contains("unknown field"));
     }

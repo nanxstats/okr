@@ -13,7 +13,7 @@ use toml_edit::{DocumentMut, Item, Table, Value, value};
 use crate::config::{Config, DEFAULT_REPO_URL};
 use crate::fetch::{Cache, Fetcher};
 use crate::hosttools::HostTools;
-use crate::lock::{Lockfile, VerificationReport, config_digest, verify_vendor};
+use crate::lock::{LOCK_VERSION, Lockfile, VerificationReport, config_digest, verify_vendor};
 use crate::manifest::{update_agents_file, update_gitignore, update_rbuildignore, write_manifests};
 use crate::progress::SyncProgress;
 use crate::resolve::{TieredGithubApi, resolve_with_progress};
@@ -644,7 +644,17 @@ fn run_sync(
     let project_directory = project_directory(config_path);
     let config = Config::load(config_path)?;
     let lock_path = project_directory.join("okr.lock");
-    let previous = Lockfile::load_optional(&lock_path)?;
+    let previous = match Lockfile::outdated_version(&lock_path)? {
+        Some(version) => {
+            if !quiet {
+                eprintln!(
+                    "warning: okr.lock uses lock version {version}; regenerating it as version {LOCK_VERSION}"
+                );
+            }
+            None
+        }
+        None => Lockfile::load_optional(&lock_path)?,
+    };
     let expected_config_digest = config_digest(&config)?;
     let fresh_previous = previous
         .as_ref()

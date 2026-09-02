@@ -347,10 +347,13 @@ lookup rather than a solver.
 
 Each resolved entry follows the same pipeline:
 
-1. **Acquire.** Put downloaded artifacts in the content-addressed cache and
-   verify SHA-256 before use. Reverify cache hits, and commit new artifacts with
-   a temporary file followed by rename. A clone-produced source is cached after
-   pruning as a normalized gzip tarball so it can also be replayed offline.
+1. **Acquire.** Put downloaded artifacts in the content-addressed cache,
+   verifying a declared `sha256` pin before use. Reverify cache hits against
+   their content address, and commit new artifacts with a temporary file
+   followed by rename. A clone-produced source is cached after pruning as a
+   normalized gzip tarball so it can also be replayed offline. Each fetch
+   method keys its cache entry by source, so a locked entry is replayed
+   without a recorded artifact digest.
 2. **Extract safely.** Extract into a temporary directory and remove the single
    archive wrapper directory. Reject absolute paths, `..` traversal, hard links,
    and special entries. Materialize symbolic links as regular files containing
@@ -360,7 +363,11 @@ Each resolved entry follows the same pipeline:
    entry's `exclude` globs.
 4. **Replace atomically.** Write `deps-src/{name}/` through a sibling temporary
    directory and rename it into place.
-5. **Hash the tree.** Inventory and hash the exact bytes left for agents.
+5. **Hash the tree.** Inventory and hash the exact bytes left for agents. When
+   a fresh lock written by the same `okr` release already records this exact
+   source, the rebuilt tree must reproduce its `tree-digest`; a difference is a
+   fetch error that names the entry, because the locked source changed
+   upstream.
 6. **Inspect metadata.** For packages, read `Version`, `License`, and `Title`
    from `DESCRIPTION`. For references, detect a license from `LICENSE*` on a
    best-effort basis.
@@ -441,7 +448,7 @@ companion installation command or write to the library.
 arrays and sorted by name within each array.
 
 ```toml
-version = 1
+version = 2
 okr-version = "0.1.0"
 generated = "2026-06-30T00:00:00Z"
 snapshot = "2026-06-30"
@@ -454,7 +461,6 @@ version = "4.2.1"
 source = "cran"
 url = "https://packagemanager.posit.co/cran/2026-06-30/src/contrib/rpact_4.2.1.tar.gz"
 fetch-method = "tarball"
-artifact-digest = "sha256:..."
 tree-digest = "sha256:..."
 license = "LGPL-2.1"
 
@@ -465,7 +471,6 @@ source = "github::pharmaverse/admiral"
 ref = "v1.5.0"
 commit = "9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c"
 fetch-method = "forge-tarball"
-artifact-digest = "sha256:..."
 tree-digest = "sha256:..."
 license = "Apache License (>= 2)"
 
@@ -475,9 +480,13 @@ source = "git::git@ghe.corp.example:stds/cdisc.git"
 ref = "2026-Q2"
 commit = "77ab77ab77ab77ab77ab77ab77ab77ab77ab77ab"
 fetch-method = "git-clone"
-artifact-digest = "sha256:..."
 tree-digest = "sha256:..."
 ```
+
+`version` is the lock format version. `okr` reads and writes one version;
+`sync` regenerates a lock written in an older format, and `status` and
+`verify` explain that `sync` is needed. Version 1 additionally recorded an
+`artifact-digest` per entry.
 
 `snapshot` is present only when the lock contains a CRAN package.
 `generated` is deterministic: snapshot midnight when a snapshot is present,
@@ -497,25 +506,40 @@ it is an algorithm-specific input pin, not a serialized attestation.
 A Git `commit` is likewise a source-control identifier rather than
 an `okr` content digest.
 
-`config-digest` hashes the normalized configuration model.
-Comments and formatting do not change it.
+### Record only the digests that have a consumer
 
-`environment-digest` hashes the lock schema version and the name-sorted package
+The lock carries three digests, each with one job.
+
+`config-digest` hashes the normalized configuration model.
+Comments and formatting do not change it. `sync` and `status` compare it with
+the current configuration to decide whether the lock is stale.
+
+`environment-digest` hashes the lock format version and the name-sorted package
 and reference entries in a canonical representation.
 It includes each aggregate tree digest. Evaluation harnesses record this value
-for a run and ask `okr verify` to recompute it.
-
-`artifact-digest` attests the cached acquisition artifact. "Artifact" includes
-both a downloaded archive and a normalized archive created from a clone.
-Every package and reference has one.
+for a run and ask `okr verify` to recompute it. It is derived from the rest of
+the lock, but it is recorded so that a harness can read it without running
+`okr`, and so `verify` can detect a manually edited lock.
 
 `tree-digest` attests the bytes that agents can read after extraction and
-pruning. It cannot be replaced by `artifact-digest`, because the artifact and
-the visible tree contain different byte sets. The per-file inventory described
-in §9 is an input to this digest but is not serialized: doing so would bloat
-the lockfile and manifest without adding integrity beyond the aggregate hash.
-Verification therefore identifies the entry whose tree changed, not the
-individual file.
+pruning. Every package and reference has one, and it is the only per-entry
+digest. `verify` recomputes it from the vendor tree, and `sync` compares it
+with the tree it rebuilds from a locked source. The per-file inventory
+described in §9 is an input to this digest but is not serialized: doing so
+would bloat the lockfile and manifest without adding integrity beyond the
+aggregate hash. Verification therefore identifies the entry whose tree
+changed, not the individual file.
+
+The lock records no digest of the acquisition artifact. Every source already
+has an upstream identity: a CRAN package by snapshot, version, and URL; a Git
+source by its full commit; and a direct URL by the `sha256` pin declared in
+`okr.toml`. What the artifact digest would add is a pin on archive bytes, and
+forges do not promise that the archive for one commit is byte-stable, so such
+a pin can fail even when every vendored file is identical. The tree digest
+already catches every change to the bytes agents read. The cache keys each
+artifact by its fetch method and source, so offline replay does not need the
+digest either. This mirrors Go's `go.sum`, which hashes a module's file tree
+rather than its zip, and uv and Cargo, which record no hash for Git sources.
 
 ## 12. Make the vendor tree discoverable
 
@@ -525,8 +549,9 @@ and one-line description (`Title` from `DESCRIPTION` when available). Its
 introduction says that the tree is generated, read-only reference material.
 
 `deps-src/_manifest.json` contains the same information plus each entry's
-`kind` and aggregate digests. It is schema-versioned with `"schema": 1` and is
-the machine-readable interface for evaluation harnesses.
+`kind` and aggregate tree digest. It is schema-versioned with `"schema": 2`
+and is the machine-readable interface for evaluation harnesses. Schema 1 also
+carried an `artifact_digest` per entry.
 
 When `manifest.agents-file = true`, `okr` maintains this marker-delimited block
 in `AGENTS.md`:

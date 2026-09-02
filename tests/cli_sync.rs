@@ -34,10 +34,14 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
     let first_markdown = fs::read(project.path().join("deps-src/_manifest.md")).unwrap();
     let lock_text = String::from_utf8(first_lock.clone()).unwrap();
     let manifest: serde_json::Value = serde_json::from_slice(&first_json).unwrap();
-    assert!(lock_text.starts_with("version = 1\n"));
+    assert!(lock_text.starts_with("version = 2\n"));
     assert!(!lock_text.contains(".files]"));
-    assert_eq!(manifest["schema"], 1);
+    assert!(!lock_text.contains("artifact-digest"));
+    assert_eq!(lock_text.matches("tree-digest = \"sha256:").count(), 1);
+    assert_eq!(manifest["schema"], 2);
     assert!(manifest["entries"][0].get("files").is_none());
+    assert!(manifest["entries"][0].get("artifact_digest").is_none());
+    assert!(manifest["entries"][0]["tree_digest"].is_string());
     assert!(!project.path().join("AGENTS.md").exists());
     assert_eq!(
         fs::read_to_string(&rbuildignore).unwrap(),
@@ -103,6 +107,48 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
         .stdout(predicate::str::contains("\"schema\": 1"))
         .stdout(predicate::str::contains("\"path\": \".\""))
         .stdout(predicate::str::contains("\"mismatch\": \"modified\""));
+}
+
+#[test]
+fn sync_regenerates_a_lock_written_in_an_older_format() {
+    let project = tempdir().unwrap();
+    let cache = project.path().join("cache");
+    let empty_path = project.path().join("empty-path");
+    fs::create_dir(&empty_path).unwrap();
+    write_cran_config(project.path());
+    let zeros = "0".repeat(64);
+    fs::write(
+        project.path().join("okr.lock"),
+        format!(
+            "version = 1\nokr-version = \"0.1.8\"\ngenerated = \"2026-06-30T00:00:00Z\"\nsnapshot = \"2026-06-30\"\nconfig-digest = \"sha256:{zeros}\"\nenvironment-digest = \"sha256:{zeros}\"\n\n[[package]]\nname = \"tinyone\"\nversion = \"1.0.0\"\nsource = \"cran\"\nurl = \"https://example.test/tinyone_1.0.0.tar.gz\"\nfetch-method = \"tarball\"\nartifact-digest = \"sha256:{zeros}\"\ntree-digest = \"sha256:{zeros}\"\nlicense = \"MIT\"\n"
+        ),
+    )
+    .unwrap();
+
+    okr(project.path(), &cache, &empty_path)
+        .arg("verify")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("uses lock version 1"))
+        .stderr(predicate::str::contains("run `okr sync`"));
+
+    okr(project.path(), &cache, &empty_path)
+        .arg("sync")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "okr.lock uses lock version 1; regenerating it as version 2",
+        ))
+        .stdout(predicate::str::contains("synchronized 1 source entry"));
+    let lock_text = fs::read_to_string(project.path().join("okr.lock")).unwrap();
+    assert!(lock_text.starts_with("version = 2\n"));
+    assert!(!lock_text.contains("artifact-digest"));
+
+    okr(project.path(), &cache, &empty_path)
+        .arg("verify")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("verified sha256:"));
 }
 
 #[test]

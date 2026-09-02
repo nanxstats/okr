@@ -35,7 +35,11 @@ pub struct ResolvedEntry {
     pub source: ResolvedSource,
     pub exclude: Vec<String>,
     pub include_tests: Option<bool>,
-    pub artifact_sha256: Option<String>,
+    /// The `sha256` input pin declared for a direct URL source.
+    pub declared_sha256: Option<String>,
+    /// The tree digest a fresh prior lock recorded for this exact source.
+    /// The rebuilt tree must reproduce it.
+    pub expected_tree_digest: Option<String>,
     pub preferred_fetch_method: Option<FetchMethod>,
 }
 
@@ -519,7 +523,8 @@ fn resolve_cran_entry(
             },
             exclude: declaration.exclude.clone(),
             include_tests: declaration.include_tests,
-            artifact_sha256: Some(locked_artifact_sha256(&prior.artifact_digest).to_owned()),
+            declared_sha256: None,
+            expected_tree_digest: tree_expectation(previous, &prior.tree_digest),
             preferred_fetch_method: Some(prior.fetch_method),
         });
     }
@@ -555,8 +560,9 @@ fn resolve_cran_entry(
         },
         exclude: declaration.exclude.clone(),
         include_tests: declaration.include_tests,
-        artifact_sha256: prior
-            .map(|entry| locked_artifact_sha256(&entry.artifact_digest).to_owned()),
+        declared_sha256: None,
+        expected_tree_digest: prior
+            .and_then(|entry| tree_expectation(previous, &entry.tree_digest)),
         preferred_fetch_method: prior.map(|entry| entry.fetch_method),
     })
 }
@@ -586,7 +592,9 @@ fn resolve_remote_entry(
             },
             exclude: declaration.exclude.clone(),
             include_tests: declaration.include_tests,
-            artifact_sha256: Some(expected_sha256.expect("validated URL digest").to_owned()),
+            declared_sha256: Some(expected_sha256.expect("validated URL digest").to_owned()),
+            expected_tree_digest: prior
+                .and_then(|prior| tree_expectation(previous, prior.tree_digest())),
             preferred_fetch_method: prior.map(PriorRemote::fetch_method),
         });
     }
@@ -694,9 +702,9 @@ fn resolve_remote_entry(
         },
         exclude: declaration.exclude.clone(),
         include_tests: declaration.include_tests,
-        artifact_sha256: matching_prior
-            .map(PriorRemote::artifact_sha256)
-            .map(str::to_owned),
+        declared_sha256: None,
+        expected_tree_digest: matching_prior
+            .and_then(|prior| tree_expectation(previous, prior.tree_digest())),
         preferred_fetch_method: matching_prior.map(PriorRemote::fetch_method),
     })
 }
@@ -931,16 +939,21 @@ impl<'a> PriorRemote<'a> {
         }
     }
 
-    fn artifact_sha256(self) -> &'a str {
+    fn tree_digest(self) -> &'a str {
         match self {
-            Self::Package(entry) => locked_artifact_sha256(&entry.artifact_digest),
-            Self::Reference(entry) => locked_artifact_sha256(&entry.artifact_digest),
+            Self::Package(entry) => &entry.tree_digest,
+            Self::Reference(entry) => &entry.tree_digest,
         }
     }
 }
 
-fn locked_artifact_sha256(digest: &str) -> &str {
-    digest.strip_prefix("sha256:").unwrap_or(digest)
+/// A prior tree digest is comparable only when this okr release produced it:
+/// extraction and pruning rules are inputs to the digest, and a release may
+/// change them.
+fn tree_expectation(previous: Option<&Lockfile>, digest: &str) -> Option<String> {
+    previous
+        .filter(|lock| lock.okr_version == env!("CARGO_PKG_VERSION"))
+        .map(|_| digest.to_owned())
 }
 
 fn previous_package<'a>(lock: Option<&'a Lockfile>, name: &str) -> Option<&'a LockedPackage> {
@@ -1192,7 +1205,7 @@ mod tests {
             Config::parse("[references]\nstandards = \"git::file:///unavailable/repo@main\"")
                 .unwrap();
         let lock = Lockfile {
-            version: 1,
+            version: crate::lock::LOCK_VERSION,
             okr_version: "0.1.0".into(),
             generated: "2026-08-11T00:00:00Z".into(),
             snapshot: None,
@@ -1206,7 +1219,6 @@ mod tests {
                 reference: Some("main".into()),
                 commit: Some("c".repeat(40)),
                 fetch_method: FetchMethod::GitClone,
-                artifact_digest: format!("sha256:{}", "d".repeat(64)),
                 tree_digest: format!("sha256:{}", "e".repeat(64)),
                 license: None,
             }],
@@ -1228,6 +1240,25 @@ mod tests {
         assert_eq!(
             resolution.entries[0].preferred_fetch_method,
             Some(FetchMethod::GitClone)
+        );
+        assert_eq!(
+            resolution.entries[0].expected_tree_digest, None,
+            "a lock from another okr release must not impose its tree digest"
+        );
+
+        let mut current = lock;
+        current.okr_version = env!("CARGO_PKG_VERSION").into();
+        let resolution = resolve(
+            &config,
+            &fetcher,
+            &HostTools::new(),
+            &StubGithub,
+            Some(&current),
+        )
+        .unwrap();
+        assert_eq!(
+            resolution.entries[0].expected_tree_digest.as_deref(),
+            Some(format!("sha256:{}", "e".repeat(64)).as_str())
         );
     }
 
