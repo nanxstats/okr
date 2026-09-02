@@ -1,15 +1,17 @@
 # Changelog
 
-## okr (development version)
+## okr 0.1.9
 
 ### Improvements
 
 - Keep only the digests that have a consumer in `okr.lock` (#64).
   The per-entry `artifact-digest` is removed, leaving `config-digest`,
   `environment-digest`, and one `tree-digest` per entry.
+
   Sources remain identified by snapshot and version, full commit, or a declared
-  `sha256` pin; offline replay finds cached artifacts by fetch method and
+  `sha256` pin. Offline replay finds cached artifacts by fetch method and
   source; and a tree rebuilt from a fresh lock must reproduce its locked tree digest.
+
   The lock format version is now 2 and `_manifest.json` uses schema 2 without
   `artifact_digest`. `okr sync` regenerates a version 1 lock with a warning,
   while `okr status` and `okr verify` ask for `okr sync`.
