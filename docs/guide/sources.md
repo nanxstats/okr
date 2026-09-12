@@ -39,7 +39,7 @@ gsDesign = "3.6.4"
 | `gitlab::` | `owner/repo` | `gitlab::jimhester/covr@abc123` |
 | `bitbucket::` | `owner/repo` | `bitbucket::sulab/mygene.r@default` |
 | `git::` | Any URL understood by Git | `git::git@ghe.example:stats/simlib.git@v2.1` |
-| `url::` | HTTP(S) `.tar.gz` or `.tgz` URL | Use table form with `sha256`; see below. |
+| `url::` | HTTP(S) `.tar.gz`, `.tgz`, or `.zip` URL | Use table form with `sha256`; see below. |
 
 A ref may be a branch, tag, abbreviated commit, or full 40-character commit.
 Named refs are resolved and frozen to the exact commit in `okr.lock`. Branches
@@ -76,10 +76,10 @@ protocols = "git::https://codeberg.org/org/protocols.git@main"
 `okr` invokes Git with explicit arguments and inherits your SSH configuration
 and credential helpers. It neither prompts for nor stores credentials.
 
-## Direct tarballs
+## Direct archives
 
-A direct URL must use table form with the expected SHA-256 of the downloaded
-archive:
+A direct URL must point to a `.tar.gz`, `.tgz`, or `.zip` archive and use
+table form with the expected SHA-256 of the downloaded file:
 
 ```toml
 [packages]
@@ -87,13 +87,27 @@ internalpkg = {
   url = "https://example.com/internalpkg_0.2.1.tar.gz",
   sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 }
+
+[references]
+tamethebeast = {
+  url = "https://mirrors.mit.edu/CTAN/info/bibtex/tamethebeast.zip",
+  sha256 = "4bbdb2d35190426f15d508723600c07e883c67e40fd9f857783c93f3b5130428",
+}
 ```
 
+Compute the pin from a downloaded copy with `shasum -a 256` or `sha256sum`.
 This digest is checked before the artifact is committed to the cache.
-The archive must contain one top-level directory and safe entries.
-Symbolic links are materialized as regular files containing their exact
-link-target bytes. Hard links, special files, absolute paths, and
-path traversal are rejected.
+
+`okr` identifies the archive format from the downloaded bytes rather than
+from the URL, and gzip tarballs and zip archives follow the same rules. The
+archive must contain one top-level directory, which is removed, and safe
+entries. Symbolic links are materialized as regular files containing their
+exact link-target bytes. Hard links, special files, absolute paths, and path
+traversal are rejected. Zip entries must be stored or deflate-compressed,
+which covers archives produced by common tools, forges, and mirrors.
+
+The lock records a direct download as `fetch-method = "tarball"` for either
+archive format; the declared URL and `sha256` pin identify the source.
 
 ## Packages and references
 
@@ -102,7 +116,7 @@ The two sections intentionally behave differently.
 | Kind | Purpose | Version semantics | Default pruning |
 |---|---|---|---|
 | `[packages]` | R package implementation context | Exact package version plus optional commit | R-specific size reduction |
-| `[references]` | Standards, protocols, examples, or other repositories | Exact commit or verified tarball; no R package version | Version-control metadata only |
+| `[references]` | Standards, protocols, examples, or other repositories | Exact commit or verified archive; no R package version | Version-control metadata only |
 
 References cannot use a CRAN-shaped value such as `"*"` or `"1.2.3"`. Add a
 Git reference from the CLI with `okr add --reference <spec>`.
@@ -134,7 +148,7 @@ requires a new `okr sync`.
 | `bioc::...` | Planned for milestone 0.2. |
 | `local::...` | Planned for milestone 0.2. |
 | `owner/repo#123` | Pull request refs are planned for milestone 0.2. |
-| `svn::...` | Permanently unsupported; use `git::` or a verified `url::` tarball. |
+| `svn::...` | Permanently unsupported; use `git::` or a verified `url::` archive. |
 
 Profiles, bundles, and transitive resolution are also roadmap features, not
 part of the current CLI.

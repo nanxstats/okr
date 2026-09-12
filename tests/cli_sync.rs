@@ -1,9 +1,12 @@
 #![cfg(unix)]
 
 use std::fs;
+use std::io::{Read as _, Write as _};
+use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
+use std::thread;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
@@ -280,6 +283,75 @@ fn file_git_reference_with_a_source_link_rebuilds_offline_from_the_normalized_cl
 }
 
 #[test]
+fn url_zip_reference_syncs_verifies_and_replays_offline() {
+    let project = tempdir().unwrap();
+    let cache = project.path().join("cache");
+    let empty_path = project.path().join("empty-path");
+    fs::create_dir(&empty_path).unwrap();
+    let archive = fs::read(fixture_path("zip/reference-archive.zip")).unwrap();
+    let sha256 = okr::digest::sha256_bytes(&archive);
+    let url = serve_archive(archive, "reference-archive.zip");
+    let config = |sha256: &str| {
+        format!(
+            "[vendor]\ngitignore = false\n\n[references]\nnotes = {{ url = \"{url}\", sha256 = \"{sha256}\" }}\n"
+        )
+    };
+    fs::write(project.path().join("okr.toml"), config(&sha256)).unwrap();
+
+    okr(project.path(), &cache, &empty_path)
+        .arg("sync")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("synchronized 1 source entry"));
+    let first_lock = fs::read(project.path().join("okr.lock")).unwrap();
+    let lock_text = String::from_utf8(first_lock.clone()).unwrap();
+    assert!(
+        lock_text.contains(&format!("source = \"url::{url}\"\n")),
+        "{lock_text}"
+    );
+    assert!(
+        lock_text.contains("fetch-method = \"tarball\"\n"),
+        "{lock_text}"
+    );
+    assert!(lock_text.contains("license = \"MIT\"\n"), "{lock_text}");
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(project.path().join("deps-src/_manifest.json")).unwrap())
+            .unwrap();
+    assert_eq!(manifest["entries"][0]["kind"], "reference");
+    assert_eq!(manifest["entries"][0]["source"], format!("url::{url}"));
+    assert!(manifest["entries"][0]["commit"].is_null());
+    let tree = project.path().join("deps-src/notes");
+    assert!(tree.join("README.md").is_file());
+    assert!(tree.join("docs/guide.md").is_file());
+    assert!(tree.join("tools/check.py").is_file());
+    assert!(!tree.join("notes-1.0").exists());
+
+    okr(project.path(), &cache, &empty_path)
+        .arg("verify")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("verified sha256:"));
+
+    fs::remove_dir_all(project.path().join("deps-src")).unwrap();
+    okr(project.path(), &cache, &empty_path)
+        .args(["sync", "--offline"])
+        .assert()
+        .success();
+    assert_eq!(
+        fs::read(project.path().join("okr.lock")).unwrap(),
+        first_lock
+    );
+    assert!(tree.join("docs/guide.md").is_file());
+
+    fs::write(project.path().join("okr.toml"), config(&"0".repeat(64))).unwrap();
+    okr(project.path(), &cache, &empty_path)
+        .arg("sync")
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains("SHA-256"));
+}
+
+#[test]
 fn sync_explains_when_a_reference_was_declared_as_a_package() {
     if !host_git() {
         return;
@@ -372,6 +444,36 @@ fn copy_tree(source: &Path, destination: &Path) {
             fs::copy(entry.path(), target).unwrap();
         }
     }
+}
+
+/// Serve one archive over plain HTTP for the rest of the test process so a
+/// `url::` declaration can be synchronized without live network access.
+fn serve_archive(bytes: Vec<u8>, name: &str) -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else {
+                break;
+            };
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                match stream.read(&mut buffer) {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => request.extend_from_slice(&buffer[..count]),
+                }
+            }
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/zip\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                bytes.len()
+            );
+            let _ = stream.write_all(header.as_bytes());
+            let _ = stream.write_all(&bytes);
+            let _ = stream.flush();
+        }
+    });
+    format!("http://{address}/{name}")
 }
 
 fn host_git() -> bool {

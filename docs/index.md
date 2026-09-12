@@ -63,7 +63,8 @@ opt in to a managed marker block in `AGENTS.md`.
 
 Continue with the [quick start](guide/quickstart.md), then see
 [source declarations](guide/sources.md) for CRAN, GitHub, GitLab, Bitbucket,
-arbitrary Git hosts, direct tarballs, and reference repositories.
+arbitrary Git hosts, direct tarball or zip archives, and reference
+repositories.
 
 ## Less is more
 

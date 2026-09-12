@@ -97,7 +97,9 @@ configuration digest. Behavioral configuration changes do.
 A forge-generated archive may honor `.gitattributes` rules such as
 `export-ignore` and `export-subst`; a Git checkout of the same commit may not
 produce identical files. The lock therefore records one of `tarball`,
-`forge-tarball`, `gh`, or `git-clone`.
+`forge-tarball`, `gh`, or `git-clone`. `tarball` names a direct download of
+the declared CRAN or `url::` archive and is also recorded for a `.zip` URL;
+the archive format is part of the source URL rather than a separate method.
 
 Reproduction replays the cached artifact corresponding to the locked method.
 It does not silently switch methods and assume the same commit implies the same

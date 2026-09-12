@@ -239,7 +239,7 @@ spec        := [type "::"] body ["@" ref]
 type        := "github" | "gitlab" | "bitbucket" | "git" | "url"
 body        := owner "/" repo            (forge types; github is the default)
              | <Git URL>                 (`git::`; any protocol Git supports)
-             | <HTTP(S) tarball URL>     (`url::`)
+             | <HTTP(S) archive URL>     (`url::`; `.tar.gz`, `.tgz`, or `.zip`)
 ref         := tag | branch | commit SHA | "*release"   (GitHub only)
 ```
 
@@ -252,7 +252,7 @@ ref         := tag | branch | commit SHA | "*release"   (GitHub only)
 | `bitbucket::sulab/mygene.r@default` | Branch on bitbucket.org |
 | `git::git@ghe.corp.example:stats/simlib.git@v2.1` | Any Git host, using the user's Git authentication |
 | `git::https://codeberg.org/org/pkg.git@v1.0` | Explicit Git URL over HTTPS |
-| `url::https://example.com/pkg_0.2.1.tar.gz` | Direct tarball; a `sha256` pin is required in table form |
+| `url::https://example.com/pkg_0.2.1.tar.gz` | Direct archive (`.tar.gz`, `.tgz`, or `.zip`); a `sha256` pin is required in table form |
 
 The following `Remotes` forms are out of scope for 0.1:
 
@@ -319,7 +319,7 @@ Use the first applicable method that succeeds:
 
 | Source | Method |
 |---|---|
-| CRAN or `url::` | Download the HTTPS tarball into the cache |
+| CRAN or `url::` | Download the HTTPS archive into the cache |
 | Public repository on github.com, gitlab.com, bitbucket.org, or codeberg.org | Download the forge archive at the resolved SHA into the cache |
 | GitHub repository whose forge archive is unavailable | Request `repos/{owner}/{repo}/tarball/{sha}` through authenticated GitHub access |
 | Other Git source, or a Git-backed source whose archive fetch fails | Clone the locked ref with `--depth 1` and `core.autocrlf=false`, require `HEAD` to equal the resolved SHA, and remove `.git` |
@@ -354,10 +354,12 @@ Each resolved entry follows the same pipeline:
    normalized gzip tarball so it can also be replayed offline. Each fetch
    method keys its cache entry by source, so a locked entry is replayed
    without a recorded artifact digest.
-2. **Extract safely.** Extract into a temporary directory and remove the single
-   archive wrapper directory. Reject absolute paths, `..` traversal, hard links,
-   and special entries. Materialize symbolic links as regular files containing
-   their exact link-target bytes; never create filesystem links from untrusted
+2. **Extract safely.** Identify the archive as a gzip tarball or a zip archive
+   from its leading bytes, extract it into a temporary directory, and remove
+   the single archive wrapper directory. Reject absolute paths, `..` traversal,
+   hard links, special entries, and zip compression methods other than stored
+   and deflate. Materialize symbolic links as regular files containing their
+   exact link-target bytes; never create filesystem links from untrusted
    source archives.
 3. **Prune by kind.** Apply case-insensitive default globs, then merge the
    entry's `exclude` globs.
@@ -493,6 +495,9 @@ tree-digest = "sha256:..."
 otherwise the Unix epoch. It is never the wall-clock sync time.
 
 The allowed fetch methods are `tarball`, `forge-tarball`, `gh`, and `git-clone`.
+`tarball` is the direct download of a declared CRAN or `url::` archive and is
+recorded for `.zip` URLs as well; the archive format is carried by the URL,
+not by the method.
 
 ### Use one digest convention
 
@@ -610,6 +615,7 @@ rtables = { spec = "insightsengineering/rtables@v0.6.13", exclude = ["vignettes/
 [references]
 cdisc-standards = "git::git@ghe.corp.example:stds/cdisc.git@2026-Q2"
 protocol-templates = { git = "https://codeberg.org/org/protocols.git", ref = "main" }
+bibtex-guide = { url = "https://mirrors.mit.edu/CTAN/info/bibtex/tamethebeast.zip", sha256 = "..." }
 ```
 
 Apply these rules:
@@ -624,7 +630,8 @@ Apply these rules:
   The field does not affect resolution, fetching, installation, or strict verification.
 - String declarations use the grammar in §7. Table declarations add per-entry
   `spec`, `git`, `url`, `ref`, `sha256`, `exclude`, and `include-tests` options.
-- A direct URL requires a SHA-256 input pin.
+- A direct URL must name a `.tar.gz`, `.tgz`, or `.zip` archive and requires a
+  SHA-256 input pin.
 - Reference declarations must use Git or URL sources. A CRAN declaration under
   `[references]` is a configuration error.
 - Package and reference names share the same vendor namespace and may not collide.
@@ -677,6 +684,8 @@ tasks, agents, and grading.
 - `reqwest` 0.13 with synchronous HTTP, `default-features = false`, and
   `features = ["blocking", "json", "rustls"]`
 - `flate2` and `tar`
+- `zip` with `default-features = false` and `features = ["deflate-flate2"]`
+  for `.zip` `url::` sources; it reuses `flate2` and adds only `typed-path`
 - `sha2`
 - `globset` and `walkdir`
 - `tempfile`
