@@ -49,7 +49,7 @@ xshell = "0.2.7"
 zip = { version = "8.6.0", default-features = false, features = [
     "deflate-flate2",
 ] }
-zstd = "0.13.3"
+zstd = "0.14.0"
 
 [dev-dependencies]
 assert_cmd = "2.2.2"
