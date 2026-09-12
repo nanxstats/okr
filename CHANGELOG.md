@@ -1,5 +1,23 @@
 # Changelog
 
+## okr (development version)
+
+### New features
+
+- Accept `.zip` archives as direct `url::` sources under `[packages]` and
+  `[references]`, for example a CTAN or release archive declared as
+  `{ url = "https://.../example.zip", sha256 = "..." }`.
+  The archive format is detected from the downloaded bytes, and zip entries
+  pass through the same wrapper-directory, path-safety, and symbolic-link
+  rules as tar entries. The `sha256` pin and the `tarball` fetch method are
+  unchanged, so existing lockfiles remain valid.
+
+### Dependencies
+
+- Add `zip` with default features disabled and only `deflate-flate2` enabled,
+  so zip decompression reuses the existing `flate2` dependency and adds
+  `typed-path` as the only new transitive crate.
+
 ## okr 0.1.9
 
 ### Improvements
