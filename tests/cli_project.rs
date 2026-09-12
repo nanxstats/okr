@@ -179,6 +179,20 @@ strict=false # keep compact formatting
         .assert()
         .code(2)
         .stderr(predicate::str::contains("sha256"));
+    okr(project.path(), &cache, &empty_path)
+        .args(["add", "--reference", "url::https://example.test/notes.zip"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("sha256"));
+    okr(project.path(), &cache, &empty_path)
+        .args(["add", "--reference", "url::https://example.test/notes.7z"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(".tar.gz, .tgz, or .zip"));
+    assert_eq!(
+        fs::read(project.path().join("okr.toml")).unwrap(),
+        before_error
+    );
 }
 
 #[test]
