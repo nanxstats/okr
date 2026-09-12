@@ -1,14 +1,14 @@
 # Changelog
 
-## okr (development version)
+## okr 0.1.10
 
 ### New features
 
 - Accept `.zip` archives as direct `url::` sources under `[packages]` and
-  `[references]`, for example a CTAN or release archive declared as
-  `{ url = "https://.../example.zip", sha256 = "..." }` (#68).
+  `[references]` (#68). For example, a CTAN or release zip archive can be
+  now declared as `{ url = "https://.../example.zip", sha256 = "..." }`.
   The archive format is detected from the downloaded bytes, and zip entries
-  pass through the same wrapper-directory, path-safety, and symbolic-link
+  pass through the same wrapper directory, path safety, and symbolic link
   rules as tar entries. The `sha256` pin and the `tarball` fetch method are
   unchanged, so existing lockfiles remain valid.
 
