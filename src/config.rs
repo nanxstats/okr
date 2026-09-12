@@ -450,6 +450,7 @@ rtables = {{ spec = "insightsengineering/rtables@v0.6.13", exclude = ["vignettes
 [references]
 cdisc-standards = "git::git@example.test:stds/cdisc.git@2026-Q2"
 protocol-templates = {{ git = "https://codeberg.org/org/protocols.git", ref = "main" }}
+bibtex-guide = {{ url = "https://mirrors.mit.edu/CTAN/info/bibtex/tamethebeast.zip", sha256 = "{SHA256}" }}
 "#,
         );
 
@@ -457,7 +458,7 @@ protocol-templates = {{ git = "https://codeberg.org/org/protocols.git", ref = "m
         let serialized = toml::to_string(&parsed).unwrap();
         let reparsed = Config::parse(&serialized).unwrap();
         assert_eq!(parsed, reparsed);
-        assert_eq!(parsed.declared_entries().unwrap().len(), 8);
+        assert_eq!(parsed.declared_entries().unwrap().len(), 9);
         assert_eq!(parsed.repository_url(), "https://example.test/cran");
     }
 
@@ -518,10 +519,38 @@ protocol-templates = {{ git = "https://codeberg.org/org/protocols.git", ref = "m
             "[packages]\npkg = \"url::https://example.test/pkg.tar.gz\"",
             "[packages]\npkg = { url = \"https://example.test/pkg.tar.gz\" }",
             "[references]\nref = { url = \"https://example.test/ref.tgz\", sha256 = \"short\" }",
+            "[references]\nnotes = { url = \"https://example.test/notes.zip\" }",
         ] {
             let error = Config::parse(input).unwrap_err();
             assert!(error.to_string().contains("sha256"), "{error}");
         }
+    }
+
+    #[test]
+    fn url_sources_must_name_a_supported_archive() {
+        let error = Config::parse(&format!(
+            "[references]\nnotes = {{ url = \"https://example.test/notes.7z\", sha256 = \"{SHA256}\" }}"
+        ))
+        .unwrap_err();
+        assert!(error.to_string().contains("[references].notes"), "{error}");
+        assert!(
+            error.to_string().contains(".tar.gz, .tgz, or .zip"),
+            "{error}"
+        );
+
+        let parsed = Config::parse(&format!(
+            "[references]\nnotes = {{ url = \"https://example.test/notes.zip\", sha256 = \"{SHA256}\" }}"
+        ))
+        .unwrap();
+        let entry = parsed.declared_entries().unwrap().remove(0);
+        assert_eq!(entry.kind, EntryKind::Reference);
+        assert!(matches!(
+            entry.source,
+            DeclaredSource::Remote {
+                expected_sha256: Some(_),
+                ..
+            }
+        ));
     }
 
     #[test]

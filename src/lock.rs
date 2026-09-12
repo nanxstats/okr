@@ -75,6 +75,9 @@ pub struct LockedReference {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum FetchMethod {
+    /// A direct download of the declared CRAN or `url::` archive. The name
+    /// predates zip support and is also recorded for a `.zip` URL, so the
+    /// lock format does not change with the archive format.
     Tarball,
     ForgeTarball,
     Gh,
@@ -331,7 +334,7 @@ fn source_fields(
 ) -> (String, Option<String>, Option<String>, Option<String>) {
     match source {
         ResolvedSource::Cran { url, .. } => ("cran".into(), Some(url.clone()), None, None),
-        ResolvedSource::Tarball {
+        ResolvedSource::Archive {
             source,
             url,
             reference,

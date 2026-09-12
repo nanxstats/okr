@@ -49,7 +49,8 @@ pub enum ResolvedSource {
         version: String,
         url: String,
     },
-    Tarball {
+    /// A direct `url::` download of a gzip tarball or zip archive.
+    Archive {
         source: String,
         url: String,
         reference: Option<String>,
@@ -585,7 +586,7 @@ fn resolve_remote_entry(
         return Ok(ResolvedEntry {
             name: declaration.name.clone(),
             kind: declaration.kind,
-            source: ResolvedSource::Tarball {
+            source: ResolvedSource::Archive {
                 source: source_id,
                 url: url.clone(),
                 reference: spec.ref_name().map(str::to_owned),

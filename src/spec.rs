@@ -4,6 +4,10 @@ use std::fmt;
 
 use crate::{Error, Result};
 
+/// Archive suffixes accepted by `url::` sources. The URL path is matched
+/// case-insensitively, and the downloaded bytes decide the actual format.
+const ARCHIVE_SUFFIXES: &[&str] = &[".tar.gz", ".tgz", ".zip"];
+
 /// A supported remote source family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -105,7 +109,7 @@ impl RemoteSpec {
                 }
             }
             RemoteType::Url => {
-                validate_tarball_url(body)?;
+                validate_archive_url(body)?;
                 RemoteLocation::Url {
                     url: body.to_owned(),
                 }
@@ -131,9 +135,9 @@ impl RemoteSpec {
                 .unwrap_or(url),
         };
         let raw = raw.strip_suffix(".git").unwrap_or(raw);
-        let raw = raw
-            .strip_suffix(".tar.gz")
-            .or_else(|| raw.strip_suffix(".tgz"))
+        let raw = ARCHIVE_SUFFIXES
+            .iter()
+            .find_map(|suffix| raw.strip_suffix(suffix))
             .unwrap_or(raw);
         raw.split_once('_').map_or(raw, |(name, _)| name).to_owned()
     }
@@ -315,15 +319,15 @@ fn validate_forge_segment(value: &str, label: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_tarball_url(url: &str) -> Result<()> {
-    validate_location_text(url, "tarball URL")?;
+fn validate_archive_url(url: &str) -> Result<()> {
+    validate_location_text(url, "archive URL")?;
     if !(url.starts_with("https://") || url.starts_with("http://")) {
-        return spec_error("url:: sources require an http:// or https:// tarball URL");
+        return spec_error("url:: sources require an http:// or https:// archive URL");
     }
     let lower = url.to_ascii_lowercase();
     let path = lower.split(['?', '#']).next().unwrap_or(&lower);
-    if !(path.ends_with(".tar.gz") || path.ends_with(".tgz")) {
-        return spec_error("url:: sources must point to a .tar.gz or .tgz tarball");
+    if !ARCHIVE_SUFFIXES.iter().any(|suffix| path.ends_with(suffix)) {
+        return spec_error("url:: sources must point to a .tar.gz, .tgz, or .zip archive");
     }
     Ok(())
 }
@@ -423,6 +427,12 @@ mod tests {
                 input: "url::https://example.com/pkg_0.2.1.tar.gz",
                 remote_type: RemoteType::Url,
                 location: url("https://example.com/pkg_0.2.1.tar.gz"),
+                reference: None,
+            },
+            ValidCase {
+                input: "url::https://mirrors.mit.edu/CTAN/info/bibtex/tamethebeast.zip",
+                remote_type: RemoteType::Url,
+                location: url("https://mirrors.mit.edu/CTAN/info/bibtex/tamethebeast.zip"),
                 reference: None,
             },
         ];
@@ -535,7 +545,11 @@ mod tests {
             "github::owner/repo\nmain",
             "hg::owner/repo",
             "url::file:///tmp/pkg.tar.gz",
-            "url::https://example.com/pkg.zip",
+            "url::https://example.com/pkg.7z",
+            "url::https://example.com/pkg.tar.bz2",
+            "url::https://example.com/pkg.tar",
+            "url::https://example.com/pkg.zip.sig",
+            "url::https://example.com/archive",
         ];
 
         for input in cases {
@@ -544,6 +558,26 @@ mod tests {
                 "`{input}` unexpectedly parsed"
             );
         }
+    }
+
+    #[test]
+    fn url_archives_accept_every_supported_suffix_case_insensitively() {
+        for input in [
+            "url::https://example.com/pkg_1.0.0.TAR.GZ",
+            "url::https://example.com/pkg.tgz?download=1",
+            "url::https://example.com/notes.ZIP#section",
+        ] {
+            assert!(
+                RemoteSpec::parse(input).is_ok(),
+                "`{input}` unexpectedly failed to parse"
+            );
+        }
+
+        let error = RemoteSpec::parse("url::https://example.com/pkg.7z").unwrap_err();
+        assert!(
+            error.to_string().contains(".tar.gz, .tgz, or .zip"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -580,6 +614,18 @@ mod tests {
         );
         assert_eq!(
             RemoteSpec::parse("url::https://host/pkg_1.2.3.tar.gz")
+                .unwrap()
+                .suggested_name(),
+            "pkg"
+        );
+        assert_eq!(
+            RemoteSpec::parse("url::https://mirrors.mit.edu/CTAN/info/bibtex/tamethebeast.zip")
+                .unwrap()
+                .suggested_name(),
+            "tamethebeast"
+        );
+        assert_eq!(
+            RemoteSpec::parse("url::https://host/pkg_1.2.3.zip")
                 .unwrap()
                 .suggested_name(),
             "pkg"

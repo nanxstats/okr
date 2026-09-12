@@ -35,6 +35,12 @@ const PACKAGE_EXCLUDES: &[&str] = &[
 ];
 const REFERENCE_EXCLUDES: &[&str] = &[".git*"];
 
+/// Unix file type bits carried by zip entries created on Unix hosts.
+const UNIX_TYPE_MASK: u32 = 0o170000;
+const UNIX_DIRECTORY: u32 = 0o040000;
+const UNIX_REGULAR: u32 = 0o100000;
+const UNIX_SYMLINK: u32 = 0o120000;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VendorResult {
     pub root: PathBuf,
@@ -146,12 +152,12 @@ fn vendor_entry(
     warnings: &mut Vec<String>,
 ) -> Result<VendoredEntry> {
     let acquisition = acquire(temporary_parent, entry, fetcher, tools, warnings)?;
-    let (raw, tarball_method) = match acquisition {
-        Acquisition::Tarball { artifact, method } => {
+    let (raw, archive_method) = match acquisition {
+        Acquisition::Archive { artifact, method } => {
             let raw = TempBuilder::new()
                 .prefix(".okr-extract-")
                 .tempdir_in(temporary_parent)?;
-            extract_tarball(&artifact.path, raw.path()).map_err(|error| {
+            extract_archive(&artifact.path, raw.path()).map_err(|error| {
                 Error::Fetch(format!(
                     "could not extract source for {} from {}: {error}",
                     entry.name,
@@ -179,7 +185,7 @@ fn vendor_entry(
             entry.name, tree.digest
         )));
     }
-    let fetch_method = match tarball_method {
+    let fetch_method = match archive_method {
         Some(method) => method,
         None => {
             fetcher
@@ -201,7 +207,8 @@ fn vendor_entry(
 }
 
 enum Acquisition {
-    Tarball {
+    /// A cached archive in any supported format, extracted before pruning.
+    Archive {
         artifact: CachedArtifact,
         method: FetchMethod,
     },
@@ -218,13 +225,13 @@ fn acquire(
     warnings: &mut Vec<String>,
 ) -> Result<Acquisition> {
     match &entry.source {
-        ResolvedSource::Cran { url, .. } | ResolvedSource::Tarball { url, .. } => {
+        ResolvedSource::Cran { url, .. } | ResolvedSource::Archive { url, .. } => {
             let artifact = fetcher.fetch_url(
                 url,
                 entry.declared_sha256.as_deref(),
                 &format!("source for {}", entry.name),
             )?;
-            Ok(Acquisition::Tarball {
+            Ok(Acquisition::Archive {
                 artifact,
                 method: FetchMethod::Tarball,
             })
@@ -278,7 +285,7 @@ fn acquire_git(
                 })?;
                 let artifact =
                     fetcher.fetch_url(url, None, &format!("forge archive for {}", entry.name))?;
-                return Ok(Acquisition::Tarball { artifact, method });
+                return Ok(Acquisition::Archive { artifact, method });
             }
             FetchMethod::Gh => {
                 let github = github.ok_or_else(|| {
@@ -288,7 +295,7 @@ fn acquire_git(
                     ))
                 })?;
                 if let Some(artifact) = cached_github_api_tarball(fetcher, github, commit)? {
-                    return Ok(Acquisition::Tarball { artifact, method });
+                    return Ok(Acquisition::Archive { artifact, method });
                 }
                 if fetcher.is_offline() {
                     return Err(Error::Fetch(format!(
@@ -297,11 +304,11 @@ fn acquire_git(
                     )));
                 }
                 let artifact = acquire_github_api_tarball(fetcher, tools, github, commit)?;
-                return Ok(Acquisition::Tarball { artifact, method });
+                return Ok(Acquisition::Archive { artifact, method });
             }
             FetchMethod::GitClone => {
                 if let Some(artifact) = fetcher.cache().lookup(&clone_cache_key(entry))? {
-                    return Ok(Acquisition::Tarball { artifact, method });
+                    return Ok(Acquisition::Archive { artifact, method });
                 }
                 if fetcher.is_offline() {
                     return Err(Error::Fetch(format!(
@@ -330,7 +337,7 @@ fn acquire_git(
     if let Some(url) = archive_url {
         match fetcher.fetch_url(url, None, &format!("forge archive for {}", entry.name)) {
             Ok(artifact) => {
-                return Ok(Acquisition::Tarball {
+                return Ok(Acquisition::Archive {
                     artifact,
                     method: FetchMethod::ForgeTarball,
                 });
@@ -345,7 +352,7 @@ fn acquire_git(
     if let Some(github) = github {
         match acquire_github_api_tarball(fetcher, tools, github, commit) {
             Ok(artifact) => {
-                return Ok(Acquisition::Tarball {
+                return Ok(Acquisition::Archive {
                     artifact,
                     method: FetchMethod::Gh,
                 });
@@ -472,12 +479,122 @@ fn clone_source(
     Ok(Acquisition::Clone { directory })
 }
 
+/// The archive container formats `okr` can extract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ArchiveFormat {
+    /// A gzip-compressed tar archive: CRAN and `url::` tarballs, forge and
+    /// GitHub API archives, and the normalized clone cache.
+    GzipTarball,
+    /// A zip archive declared through a `url::` source.
+    Zip,
+}
+
+impl ArchiveFormat {
+    /// Identify an archive by its leading bytes rather than by a file name.
+    /// Cached artifacts carry no extension, and sniffing also produces a clear
+    /// error when a server answers with something other than an archive.
+    fn detect(path: &Path) -> Result<Self> {
+        let mut magic = Vec::with_capacity(4);
+        File::open(path)?.take(4).read_to_end(&mut magic)?;
+        match magic.as_slice() {
+            [0x1f, 0x8b, ..] => Ok(Self::GzipTarball),
+            [b'P', b'K', 0x03, 0x04] | [b'P', b'K', 0x05, 0x06] | [b'P', b'K', 0x07, 0x08] => {
+                Ok(Self::Zip)
+            }
+            _ => Err(invalid_archive(
+                "unrecognized archive format; expected a gzip tarball (.tar.gz or .tgz) or a zip archive (.zip)",
+            )),
+        }
+    }
+}
+
+/// Extract an archive of any supported format below `destination`, removing
+/// its single wrapper directory.
+fn extract_archive(archive_path: &Path, destination: &Path) -> Result<()> {
+    match ArchiveFormat::detect(archive_path)? {
+        ArchiveFormat::GzipTarball => extract_tarball(archive_path, destination),
+        ArchiveFormat::Zip => extract_zip(archive_path, destination),
+    }
+}
+
+/// The wrapper directory and file set shared by every entry of one archive.
+///
+/// Tar and zip extraction both route their entries through this type so the
+/// wrapper-stripping rule, path safety checks, and duplicate detection are
+/// identical across formats.
+#[derive(Debug, Default)]
+struct ArchiveLayout {
+    wrapper: Option<OsString>,
+    files: BTreeSet<PathBuf>,
+}
+
+impl ArchiveLayout {
+    /// Validate an entry path and return it relative to the wrapper
+    /// directory. The wrapper directory entry itself yields `None`.
+    fn relative(&mut self, path: &Path, is_directory: bool) -> Result<Option<PathBuf>> {
+        let mut components = path.components();
+        let Some(first) = components.next() else {
+            return Err(invalid_archive("empty archive path"));
+        };
+        let Component::Normal(first) = first else {
+            return Err(unsafe_archive_path(path));
+        };
+        match &self.wrapper {
+            Some(wrapper) if wrapper != first => {
+                return Err(invalid_archive(format!(
+                    "archive must contain a single top-level directory, found `{}` and `{}`",
+                    wrapper.to_string_lossy(),
+                    first.to_string_lossy()
+                )));
+            }
+            Some(_) => {}
+            None => self.wrapper = Some(first.to_owned()),
+        }
+        let mut relative = PathBuf::new();
+        for component in components {
+            let Component::Normal(part) = component else {
+                return Err(unsafe_archive_path(path));
+            };
+            relative.push(part);
+        }
+        if relative.as_os_str().is_empty() {
+            if is_directory {
+                return Ok(None);
+            }
+            return Err(invalid_archive(format!(
+                "archive must contain a single top-level directory, found top-level file `{}`",
+                first.to_string_lossy()
+            )));
+        }
+        Ok(Some(relative))
+    }
+
+    /// Record a file beneath the wrapper directory, rejecting duplicates.
+    fn record_file(&mut self, relative: &Path) -> Result<()> {
+        if self.files.insert(relative.to_path_buf()) {
+            Ok(())
+        } else {
+            Err(invalid_archive(format!(
+                "duplicate archive path {}",
+                relative.display()
+            )))
+        }
+    }
+
+    /// Require that the archive produced at least one file.
+    fn finish(self) -> Result<()> {
+        if self.files.is_empty() {
+            return Err(invalid_archive("archive contains no files"));
+        }
+        Ok(())
+    }
+}
+
 fn extract_tarball(archive_path: &Path, destination: &Path) -> Result<()> {
     let file = File::open(archive_path)?;
     let decoder = GzDecoder::new(file);
     let mut archive = tar::Archive::new(decoder);
-    let mut top_level: Option<OsString> = None;
-    let mut files = BTreeSet::new();
+    let mut layout = ArchiveLayout::default();
     for entry in archive.entries()? {
         let mut entry = entry?;
         let entry_type = entry.header().entry_type();
@@ -485,53 +602,14 @@ fn extract_tarball(archive_path: &Path, destination: &Path) -> Result<()> {
             continue;
         }
         let path = entry.path()?.into_owned();
-        let mut components = path.components();
-        let first = components.next().ok_or_else(|| {
-            Error::Io(io::Error::new(io::ErrorKind::InvalidData, "empty tar path"))
-        })?;
-        let Component::Normal(first) = first else {
-            return Err(Error::Io(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unsafe tar path {}", path.display()),
-            )));
-        };
-        if let Some(expected) = &top_level {
-            if expected != first {
-                return Err(Error::Io(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "tarball has more than one top-level directory (`{}` and `{}`)",
-                        expected.to_string_lossy(),
-                        first.to_string_lossy()
-                    ),
-                )));
-            }
-        } else {
-            top_level = Some(first.to_owned());
-        }
-        let mut relative = PathBuf::new();
-        for component in components {
-            let Component::Normal(part) = component else {
-                return Err(Error::Io(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("unsafe tar path {}", path.display()),
-                )));
-            };
-            relative.push(part);
-        }
-        if relative.as_os_str().is_empty() {
+        let Some(relative) = layout.relative(&path, entry_type.is_dir())? else {
             continue;
-        }
+        };
         let output = destination.join(&relative);
         if entry_type.is_dir() {
             fs::create_dir_all(output)?;
         } else if entry_type.is_file() || entry_type.is_symlink() {
-            if !files.insert(relative.clone()) {
-                return Err(Error::Io(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("duplicate tar path {}", relative.display()),
-                )));
-            }
+            layout.record_file(&relative)?;
             if let Some(parent) = output.parent() {
                 fs::create_dir_all(parent)?;
             }
@@ -540,27 +618,64 @@ fn extract_tarball(archive_path: &Path, destination: &Path) -> Result<()> {
                 io::copy(&mut entry, &mut file)?;
             } else {
                 let target = entry.link_name_bytes().ok_or_else(|| {
-                    Error::Io(io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("symbolic link has no target at {}", path.display()),
-                    ))
+                    invalid_archive(format!("symbolic link has no target at {}", path.display()))
                 })?;
                 fs::write(output, target.as_ref())?;
             }
         } else {
-            return Err(Error::Io(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("unsupported tar entry type at {}", path.display()),
+            return Err(invalid_archive(format!(
+                "unsupported tar entry type at {}",
+                path.display()
             )));
         }
     }
-    if files.is_empty() {
-        return Err(Error::Io(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "tarball contains no files",
-        )));
+    layout.finish()
+}
+
+fn extract_zip(archive_path: &Path, destination: &Path) -> Result<()> {
+    let mut archive = zip::ZipArchive::new(File::open(archive_path)?).map_err(zip_error)?;
+    let mut layout = ArchiveLayout::default();
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index).map_err(zip_error)?;
+        let name = entry.name().to_owned();
+        let unix_type = entry.unix_mode().map_or(0, |mode| mode & UNIX_TYPE_MASK);
+        if !matches!(unix_type, 0 | UNIX_DIRECTORY | UNIX_REGULAR | UNIX_SYMLINK) {
+            return Err(invalid_archive(format!(
+                "unsupported zip entry type at {name}"
+            )));
+        }
+        let is_directory = entry.is_dir() || unix_type == UNIX_DIRECTORY;
+        let Some(relative) = layout.relative(Path::new(&name), is_directory)? else {
+            continue;
+        };
+        let output = destination.join(&relative);
+        if is_directory {
+            fs::create_dir_all(output)?;
+            continue;
+        }
+        // A zip symbolic link stores its target as the entry content, so
+        // copying the content materializes the link exactly as tar
+        // extraction does.
+        layout.record_file(&relative)?;
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut file = File::create(output)?;
+        io::copy(&mut entry, &mut file)?;
     }
-    Ok(())
+    layout.finish()
+}
+
+fn zip_error(error: zip::result::ZipError) -> Error {
+    Error::Io(io::Error::from(error))
+}
+
+fn invalid_archive(message: impl Into<String>) -> Error {
+    Error::Io(io::Error::new(io::ErrorKind::InvalidData, message.into()))
+}
+
+fn unsafe_archive_path(path: &Path) -> Error {
+    invalid_archive(format!("unsafe archive path {}", path.display()))
 }
 
 fn build_excludes(
@@ -874,7 +989,7 @@ fn replace_directory(staging: TempDir, target: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     use flate2::Compression;
     use flate2::write::GzEncoder;
@@ -882,8 +997,8 @@ mod tests {
     use xshell::{Shell, cmd};
 
     use super::{
-        build_excludes, copy_pruned, detect_reference_license, extract_tarball,
-        github_api_tarball_url, metadata, reference_title, vendor,
+        ArchiveFormat, ArchiveLayout, build_excludes, copy_pruned, detect_reference_license,
+        extract_archive, github_api_tarball_url, metadata, reference_title, vendor,
     };
     use crate::config::{Config, EntryKind};
     use crate::fetch::{Cache, Fetcher};
@@ -1047,7 +1162,7 @@ mod tests {
 
         let extracted = directory.path().join("extracted");
         fs::create_dir(&extracted).unwrap();
-        extract_tarball(&archive_path, &extracted).unwrap();
+        extract_archive(&archive_path, &extracted).unwrap();
 
         assert_eq!(
             fs::read(extracted.join("DESCRIPTION")).unwrap(),
@@ -1089,7 +1204,7 @@ mod tests {
 
         let extracted = directory.path().join("extracted");
         fs::create_dir(&extracted).unwrap();
-        extract_tarball(&archive_path, &extracted).unwrap();
+        extract_archive(&archive_path, &extracted).unwrap();
 
         let link = extracted.join("tests/Pkgs/pkgA");
         assert!(fs::symlink_metadata(&link).unwrap().file_type().is_file());
@@ -1224,7 +1339,7 @@ mod tests {
             entries: vec![ResolvedEntry {
                 name: "tinytwo".into(),
                 kind: crate::config::EntryKind::Package,
-                source: ResolvedSource::Tarball {
+                source: ResolvedSource::Archive {
                     source: "url::fixture".into(),
                     url: format!("file://{}", fixture.display()),
                     reference: None,
@@ -1365,6 +1480,302 @@ mod tests {
                 .join("deps-src/tinytwo/DESCRIPTION")
                 .is_file()
         );
+    }
+
+    enum ZipEntry<'a> {
+        Directory(&'a str),
+        File(&'a str, &'a [u8]),
+        Symlink(&'a str, &'a str),
+    }
+
+    fn write_zip(path: &Path, entries: &[ZipEntry<'_>]) {
+        use std::io::Write as _;
+
+        use zip::write::SimpleFileOptions;
+
+        let mut writer = zip::ZipWriter::new(fs::File::create(path).unwrap());
+        let options =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for entry in entries {
+            match entry {
+                ZipEntry::Directory(name) => writer.add_directory(*name, options).unwrap(),
+                ZipEntry::File(name, contents) => {
+                    writer.start_file(*name, options).unwrap();
+                    writer.write_all(contents).unwrap();
+                }
+                ZipEntry::Symlink(name, target) => {
+                    writer.add_symlink(*name, *target, options).unwrap();
+                }
+            }
+        }
+        writer.finish().unwrap();
+    }
+
+    #[test]
+    fn archive_format_is_detected_from_leading_bytes() {
+        assert_eq!(
+            ArchiveFormat::detect(&fixture_path("forge/package-archive.tar.gz")).unwrap(),
+            ArchiveFormat::GzipTarball
+        );
+        assert_eq!(
+            ArchiveFormat::detect(&fixture_path("zip/reference-archive.zip")).unwrap(),
+            ArchiveFormat::Zip
+        );
+
+        let directory = tempdir().unwrap();
+        for (name, contents) in [
+            ("html", &b"<html>not found</html>"[..]),
+            ("empty", &b""[..]),
+            ("short", &b"PK"[..]),
+        ] {
+            let path = directory.path().join(name);
+            fs::write(&path, contents).unwrap();
+            let error = extract_archive(&path, directory.path()).unwrap_err();
+            assert!(
+                error.to_string().contains("unrecognized archive format"),
+                "{name}: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn archive_layout_requires_one_wrapper_directory_and_unique_files() {
+        let mut layout = ArchiveLayout::default();
+        assert_eq!(layout.relative(Path::new("source"), true).unwrap(), None);
+        assert_eq!(
+            layout
+                .relative(Path::new("source/R/hello.R"), false)
+                .unwrap(),
+            Some(PathBuf::from("R/hello.R"))
+        );
+        layout.record_file(Path::new("R/hello.R")).unwrap();
+        let duplicate = layout.record_file(Path::new("R/hello.R")).unwrap_err();
+        assert!(
+            duplicate.to_string().contains("duplicate archive path"),
+            "{duplicate}"
+        );
+        for (path, guidance) in [
+            ("other/README.md", "single top-level directory"),
+            ("README.md", "single top-level directory"),
+            ("../escape", "unsafe archive path"),
+            ("/absolute", "unsafe archive path"),
+            ("source/../escape", "unsafe archive path"),
+            ("", "empty archive path"),
+        ] {
+            let error = layout.relative(Path::new(path), false).unwrap_err();
+            assert!(error.to_string().contains(guidance), "`{path}`: {error}");
+        }
+
+        let top_level_file = ArchiveLayout::default()
+            .relative(Path::new("README.md"), false)
+            .unwrap_err();
+        assert!(
+            top_level_file
+                .to_string()
+                .contains("top-level file `README.md`"),
+            "{top_level_file}"
+        );
+        let empty = ArchiveLayout::default().finish().unwrap_err();
+        assert!(empty.to_string().contains("contains no files"), "{empty}");
+    }
+
+    #[test]
+    fn zip_extraction_strips_the_wrapper_and_materializes_symbolic_links() {
+        let directory = tempdir().unwrap();
+        let archive_path = directory.path().join("reference-archive.zip");
+        write_zip(
+            &archive_path,
+            &[
+                ZipEntry::Directory("source"),
+                ZipEntry::File("source/README.md", b"# Notes\n"),
+                ZipEntry::Directory("source/tests/Pkgs/xDir/pkg"),
+                ZipEntry::File("source/tests/Pkgs/xDir/pkg/DESCRIPTION", b"Package: pkgA\n"),
+                ZipEntry::Symlink("source/tests/Pkgs/pkgA", "xDir/pkg"),
+            ],
+        );
+
+        let extracted = directory.path().join("extracted");
+        fs::create_dir(&extracted).unwrap();
+        extract_archive(&archive_path, &extracted).unwrap();
+
+        assert_eq!(fs::read(extracted.join("README.md")).unwrap(), b"# Notes\n");
+        assert_eq!(
+            fs::read(extracted.join("tests/Pkgs/xDir/pkg/DESCRIPTION")).unwrap(),
+            b"Package: pkgA\n"
+        );
+        let link = extracted.join("tests/Pkgs/pkgA");
+        assert!(fs::symlink_metadata(&link).unwrap().file_type().is_file());
+        assert_eq!(fs::read(link).unwrap(), b"xDir/pkg");
+        assert!(!extracted.join("source").exists());
+    }
+
+    #[test]
+    fn zip_extraction_rejects_unsafe_and_ambiguous_layouts() {
+        let directory = tempdir().unwrap();
+        let cases: [(&str, &[ZipEntry<'_>], &str); 4] = [
+            (
+                "traversal",
+                &[ZipEntry::File("source/../escape.txt", b"escaped")],
+                "unsafe archive path",
+            ),
+            (
+                "absolute",
+                &[ZipEntry::File("/escape.txt", b"escaped")],
+                "unsafe archive path",
+            ),
+            (
+                "two-roots",
+                &[
+                    ZipEntry::File("one/README.md", b"one"),
+                    ZipEntry::File("two/README.md", b"two"),
+                ],
+                "single top-level directory",
+            ),
+            (
+                "empty",
+                &[ZipEntry::Directory("source")],
+                "contains no files",
+            ),
+        ];
+        for (name, entries, guidance) in cases {
+            let archive_path = directory.path().join(format!("{name}.zip"));
+            write_zip(&archive_path, entries);
+            let extracted = directory.path().join(name);
+            fs::create_dir(&extracted).unwrap();
+            let error = extract_archive(&archive_path, &extracted).unwrap_err();
+            assert!(error.to_string().contains(guidance), "{name}: {error}");
+            assert!(!directory.path().join("escape.txt").exists());
+        }
+    }
+
+    #[test]
+    fn reference_zip_archive_is_vendored_and_replays_offline() {
+        let project = tempdir().unwrap();
+        let fixture = fixture_path("zip/reference-archive.zip");
+        let sha256 = crate::digest::sha256_file(&fixture).unwrap();
+        let config = Config::parse(&format!(
+            "[references]\nnotes = {{ url = \"https://example.test/notes-1.0.zip\", sha256 = \"{sha256}\" }}"
+        ))
+        .unwrap();
+        let entry = ResolvedEntry {
+            name: "notes".into(),
+            kind: EntryKind::Reference,
+            source: ResolvedSource::Archive {
+                source: "url::https://example.test/notes-1.0.zip".into(),
+                url: format!("file://{}", fixture.display()),
+                reference: None,
+            },
+            exclude: Vec::new(),
+            include_tests: None,
+            declared_sha256: Some(sha256),
+            expected_tree_digest: None,
+            preferred_fetch_method: None,
+        };
+        let resolution = |entry: ResolvedEntry| Resolution {
+            entries: vec![entry],
+            warnings: Vec::new(),
+        };
+        let cache = Cache::new(project.path().join("cache"));
+
+        let online = vendor(
+            project.path(),
+            &config,
+            &resolution(entry.clone()),
+            &Fetcher::new(cache.clone(), false).unwrap(),
+            &HostTools::new(),
+        )
+        .unwrap();
+        let tree = project.path().join("deps-src/notes");
+        assert!(tree.join("README.md").is_file());
+        assert!(tree.join("CHANGES").is_file());
+        assert!(tree.join("docs/guide.md").is_file());
+        assert!(tree.join("tools/check.py").is_file());
+        assert!(!tree.join("notes-1.0").exists());
+        assert_eq!(online.entries[0].version, None);
+        assert_eq!(online.entries[0].license.as_deref(), Some("MIT"));
+        assert_eq!(online.entries[0].fetch_method, FetchMethod::Tarball);
+
+        let mut replay = entry;
+        replay.expected_tree_digest = Some(online.entries[0].tree.digest.clone());
+        replay.preferred_fetch_method = Some(FetchMethod::Tarball);
+        let offline = vendor(
+            project.path(),
+            &config,
+            &resolution(replay),
+            &Fetcher::new(cache, true).unwrap(),
+            &HostTools::new(),
+        )
+        .unwrap();
+        assert_eq!(offline.entries[0].tree, online.entries[0].tree);
+    }
+
+    #[test]
+    fn package_zip_archive_is_pruned_like_a_tarball() {
+        let project = tempdir().unwrap();
+        let source = fixture_path("sources/tinytwo");
+        let files = [
+            "DESCRIPTION",
+            "NAMESPACE",
+            "R/hello.R",
+            "man/hello.Rd",
+            "data/answers.csv",
+            "tests/testthat.R",
+        ]
+        .map(|relative| {
+            (
+                format!("tinytwo-2.0.0/{relative}"),
+                fs::read(source.join(relative)).unwrap(),
+            )
+        });
+        let entries = files
+            .iter()
+            .map(|(name, contents)| ZipEntry::File(name, contents))
+            .collect::<Vec<_>>();
+        let archive_path = project.path().join("tinytwo.zip");
+        write_zip(&archive_path, &entries);
+        let sha256 = crate::digest::sha256_file(&archive_path).unwrap();
+        let config = Config::parse(&format!(
+            "[vendor]\ninclude-tests = false\n[packages]\ntinytwo = {{ url = \"https://example.test/tinytwo.zip\", sha256 = \"{sha256}\" }}"
+        ))
+        .unwrap();
+        let resolution = Resolution {
+            entries: vec![ResolvedEntry {
+                name: "tinytwo".into(),
+                kind: EntryKind::Package,
+                source: ResolvedSource::Archive {
+                    source: "url::https://example.test/tinytwo.zip".into(),
+                    url: format!("file://{}", archive_path.display()),
+                    reference: None,
+                },
+                exclude: Vec::new(),
+                include_tests: None,
+                declared_sha256: Some(sha256),
+                expected_tree_digest: None,
+                preferred_fetch_method: None,
+            }],
+            warnings: Vec::new(),
+        };
+
+        let result = vendor(
+            project.path(),
+            &config,
+            &resolution,
+            &Fetcher::new(Cache::new(project.path().join("cache")), false).unwrap(),
+            &HostTools::new(),
+        )
+        .unwrap();
+        let tree = project.path().join("deps-src/tinytwo");
+        assert!(tree.join("DESCRIPTION").is_file());
+        assert!(tree.join("R/hello.R").is_file());
+        assert!(tree.join("man/hello.Rd").is_file());
+        assert!(!tree.join("data").exists());
+        assert!(!tree.join("tests").exists());
+        assert_eq!(result.entries[0].version.as_deref(), Some("2.0.0"));
+        assert_eq!(
+            result.entries[0].license.as_deref(),
+            Some("Apache License (>= 2)")
+        );
+        assert_eq!(result.entries[0].fetch_method, FetchMethod::Tarball);
     }
 
     fn fixture_path(relative: &str) -> std::path::PathBuf {
