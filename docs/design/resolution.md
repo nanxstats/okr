@@ -45,7 +45,7 @@ choice as provenance.
 
 | Source situation | Typical method |
 |---|---|
-| CRAN or direct URL | Verified HTTP tarball |
+| CRAN or direct URL | Verified HTTP download of a gzip tarball or zip archive |
 | Public GitHub, GitLab, Bitbucket, or Codeberg repository | Forge archive at the resolved commit |
 | Private GitHub repository | Authenticated `gh` archive download when available |
 | Arbitrary or self-hosted Git remote | Shallow Git clone, with `core.autocrlf=false` |
@@ -72,8 +72,11 @@ a ref.
 
 ## Safe extraction and replacement
 
+`okr` recognizes gzip tarballs and zip archives by their leading bytes, so
+every acquisition path shares one extraction routine and the same checks.
 Archives must contain entries below one safe top-level directory.
-Absolute paths, `..` traversal, hard links, and special files are rejected.
+Absolute paths, `..` traversal, hard links, and special files are rejected,
+and zip entries must be stored or deflate-compressed.
 Symbolic links from archives and clones are materialized as regular files
 containing their exact link-target bytes. PAX global metadata records are
 ignored when detecting the archive's top-level directory.

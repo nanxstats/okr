@@ -41,6 +41,7 @@ rtables = { spec = "insightsengineering/rtables@v0.6.13", exclude = ["vignettes/
 [references]
 cdisc-standards = "git::git@ghe.example:stds/cdisc.git@2026-Q2"
 protocol-templates = { git = "https://codeberg.org/org/protocols.git", ref = "main" }
+tamethebeast = { url = "https://mirrors.mit.edu/CTAN/info/bibtex/tamethebeast.zip", sha256 = "4bbdb2d35190426f15d508723600c07e883c67e40fd9f857783c93f3b5130428" }
 ```
 
 ## Project settings
@@ -114,8 +115,9 @@ wanted.
 a table. Entry names may contain ASCII letters, digits, `.`, `_`, and `-`;
 package names must start with a letter. A name cannot occur in both sections.
 
-The table form accepts exactly one of `spec`, `git`, or `url`, plus these
-optional keys:
+The table form accepts exactly one of `spec`, `git`, or `url`, where `url`
+names an HTTP(S) `.tar.gz`, `.tgz`, or `.zip` archive, plus these optional
+keys:
 
 | Key | Meaning |
 |---|---|

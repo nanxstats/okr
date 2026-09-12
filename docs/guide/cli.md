@@ -46,8 +46,9 @@ packages; remote forms follow the grammar in
 instead of `[packages]`.
 
 Existing entries are never overwritten, and edits preserve TOML comments and
-formatting. Direct URL sources require a SHA-256 and therefore must be written
-in table form in `okr.toml`.
+formatting. Direct URL sources, which may be `.tar.gz`, `.tgz`, or `.zip`
+archives, require a SHA-256 and therefore must be written in table form in
+`okr.toml`.
 
 ### `okr sync [--offline] [--strict]`
 
