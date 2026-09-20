@@ -8,7 +8,7 @@ icon: lucide/house
 [![CI tests](https://github.com/nanxstats/okr/actions/workflows/ci.yml/badge.svg)](https://github.com/nanxstats/okr/actions/workflows/ci.yml)
 [![Documentation](https://github.com/nanxstats/okr/actions/workflows/docs.yml/badge.svg)](https://nanx.me/okr/)
 
-> Reproducible R source context for coding agents.
+Reproducible R source context for coding agents.
 
 `okr` retrieves exact R package sources and arbitrary reference repositories,
 organizes them into a greppable source tree, and records enough provenance to

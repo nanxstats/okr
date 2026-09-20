@@ -4,7 +4,7 @@
 [![CI tests](https://github.com/nanxstats/okr/actions/workflows/ci.yml/badge.svg)](https://github.com/nanxstats/okr/actions/workflows/ci.yml)
 [![Documentation](https://github.com/nanxstats/okr/actions/workflows/docs.yml/badge.svg)](https://nanx.me/okr/)
 
-> Reproducible R source context for coding agents.
+Reproducible R source context for coding agents.
 
 Installed R packages are poor context for coding agents. R code is packed into
 binary lazy load databases (`.rdb`/`.rdx`), while compiled package `src/` trees
