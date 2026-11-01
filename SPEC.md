@@ -685,7 +685,8 @@ tasks, agents, and grading.
   `features = ["blocking", "json", "rustls"]`
 - `flate2` and `tar`
 - `zip` with `default-features = false` and `features = ["deflate-flate2"]`
-  for `.zip` `url::` sources; it reuses `flate2` and adds only `typed-path`
+  for `.zip` `url::` sources; it reuses `flate2` and adds `typed-path`, plus
+  `nix` on macOS and the BSDs
 - `sha2`
 - `globset` and `walkdir`
 - `tempfile`
