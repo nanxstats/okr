@@ -637,7 +637,7 @@ fn extract_zip(archive_path: &Path, destination: &Path) -> Result<()> {
     let mut layout = ArchiveLayout::default();
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index).map_err(zip_error)?;
-        let name = entry.name().to_owned();
+        let name = entry.name().map_err(zip_error)?.into_owned();
         let unix_type = entry.unix_mode().map_or(0, |mode| mode & UNIX_TYPE_MASK);
         if !matches!(unix_type, 0 | UNIX_DIRECTORY | UNIX_REGULAR | UNIX_SYMLINK) {
             return Err(invalid_archive(format!(

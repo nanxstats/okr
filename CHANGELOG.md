@@ -1,5 +1,18 @@
 # Changelog
 
+## okr (development version)
+
+### Dependencies
+
+- Upgrade `zip` from 8.6.0 to 9.2.1 (#72). The upgrade adds `nix` as a
+  transitive dependency on macOS and BSD systems.
+
+  Archives with ASCII entry names or names flagged as UTF-8, including
+  the existing fixtures, extract to identical trees and locked tree digests.
+  zip 9 improves on two edge cases: unflagged names that are valid UTF-8 are
+  now decoded as UTF-8 rather than CP437, and the Unix mode bits in entries
+  created on MS-DOS hosts are ignored in favor of the DOS attributes.
+
 ## okr 0.1.10
 
 ### New features
