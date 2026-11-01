@@ -46,7 +46,7 @@ toml = "1.1.4"
 toml_edit = "0.25.13"
 walkdir = "2.5.0"
 xshell = "0.2.7"
-zip = { version = "8.6.0", default-features = false, features = [
+zip = { version = "9.2.1", default-features = false, features = [
     "deflate-flate2",
 ] }
 zstd = "0.14.0"
