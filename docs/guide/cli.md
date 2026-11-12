@@ -17,7 +17,7 @@ okr [GLOBAL OPTIONS] <COMMAND>
 |---|---|
 | `--config <PATH>` | Configuration path; defaults to `okr.toml`. The file's parent is the project directory. |
 | `--quiet` | Suppress non-error human output. Conflicts with `--verbose`. |
-| `--verbose` | Print additional sync diagnostics, including the environment digest and cache summary. |
+| `--verbose` | Print additional sync diagnostics: one line per source in each stage, the environment digest, and the cache summary. |
 | `--json` | Emit schema-versioned JSON for `status` or `verify`. Rejected by other commands. |
 | `-h`, `--help` | Show help. |
 | `-V`, `--version` | Show the installed version. |
@@ -60,8 +60,28 @@ hits. `--strict` upgrades installed-library mismatches to exit code 4.
 An unchanged configuration with an intact vendor tree uses a digest-based
 no-op path. When the lock is fresh but an entry must be rebuilt, the rebuilt
 tree must reproduce the locked tree digest. A lock written in an older format
-is regenerated with a warning. Interactive terminals show progress;
-redirected, quiet, and non-interactive output remains line-oriented.
+is regenerated with a warning.
+
+On an interactive terminal, `sync` shows live progress on standard error:
+
+```text
+Resolved 12 sources in 1.4s
+⠹ Vendoring sources 4/12
+    admiral  ━━━━━━━╸────────   1.9/4.1 MiB  412.5 KiB/s  from github.com
+```
+
+The header names the stage and counts finished sources. The row beneath it
+follows the source being worked on. It shows either a step, such as
+`resolving v1.5.0 via git ls-remote (3s)`, or a download with its bytes, rate,
+and host. Work that finishes within a fraction of a second, such as a cache
+hit, is not drawn, so a sync served from the cache shows only its results.
+Each stage leaves one summary line when it ends.
+
+`--verbose` keeps a line for every source, for example
+`✓ admiral  vendored 1.5.0 (forge-tarball) · downloaded 4.1 MiB in 9.8s`, and
+writes those lines even when standard error is redirected. Without
+`--verbose`, redirected output carries no progress, and `--quiet` suppresses
+progress everywhere.
 
 ### `okr status [--json]`
 

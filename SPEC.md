@@ -179,6 +179,25 @@ It is idempotent and has five stages:
 When the lock is current and the complete vendor tree matches its digests,
 `sync` takes a digest-based no-op path.
 
+`sync` reports progress on standard error, and only where someone can use it:
+
+- On an interactive terminal it draws a live region: a header that names the
+  current stage and counts finished sources, one row for each source being
+  worked on, and one durable summary line for each finished stage. A row says
+  what is happening to its source: the step, or a download with its bytes,
+  rate, and host. Work that completes within a fraction of a second is not
+  drawn, and a finished row is reused rather than removed, so the region does
+  not flicker or shift.
+- `--verbose` also keeps one durable line per source in each stage, whether or
+  not standard error is a terminal.
+- When standard error is not a terminal, `sync` reports no progress unless
+  `--verbose` is set.
+- `--quiet` suppresses all progress.
+
+Nothing else writes to the terminal while the live region is drawn. Host-tool
+output is captured, and a failing tool's own message becomes part of the
+error.
+
 ### `status`
 
 `okr status` reports:
