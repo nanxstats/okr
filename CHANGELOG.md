@@ -1,5 +1,34 @@
 # Changelog
 
+## okr (development version)
+
+### Improvements
+
+- Redesign the interactive `okr sync` progress display so that each source
+  reports its own progress (#75). A header names the stage and counts
+  finished sources. The row beneath it follows the source being worked on and
+  shows either the step, such as `resolving v1.5.0 via git ls-remote (3s)`,
+  or a download with its bytes, rate, and host. Each stage ends in one summary
+  line that stays on screen, such as
+  `Vendored 12 sources in 14.2s · 38.4 MiB downloaded`.
+
+  Work that finishes within 200 ms is not drawn, and a finished row is reused
+  rather than removed. A sync served from the cache therefore no longer
+  flashes messages or shifts lines.
+- Keep one line per source in each stage under `--verbose`, with the resolved
+  version or commit, the fetch method, and the download size (#75). These
+  lines are also written when standard error is not a terminal. `--verbose`
+  no longer turns the interactive display off. Without `--verbose`, redirected
+  output still carries no progress.
+
+### Bug fixes
+
+- Stop `git` from writing to the terminal during `okr sync` (#75). Clones
+  echoed their `$ git ...` command lines, even under `--quiet`, and a failing
+  `git ls-remote` printed its error before `okr` fell back to a forge API.
+  Both overwrote the progress display and left stale lines behind. A failing
+  `git` command now reports its own message as part of the `okr` error.
+
 ## okr 0.1.11
 
 ### Dependencies

@@ -84,6 +84,19 @@ pub enum FetchMethod {
     GitClone,
 }
 
+impl FetchMethod {
+    /// The name recorded for this method in `okr.lock`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Tarball => "tarball",
+            Self::ForgeTarball => "forge-tarball",
+            Self::Gh => "gh",
+            Self::GitClone => "git-clone",
+        }
+    }
+}
+
 impl Lockfile {
     pub fn build(
         config: &Config,
@@ -944,5 +957,17 @@ mod tests {
         );
         let error = toml::from_str::<Lockfile>(&malformed).unwrap_err();
         assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn fetch_method_names_match_their_lock_encoding() {
+        for method in [
+            FetchMethod::Tarball,
+            FetchMethod::ForgeTarball,
+            FetchMethod::Gh,
+            FetchMethod::GitClone,
+        ] {
+            assert_eq!(serde_json::to_value(method).unwrap(), method.as_str());
+        }
     }
 }

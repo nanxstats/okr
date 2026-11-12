@@ -659,28 +659,28 @@ fn run_sync(
     let fresh_previous = previous
         .as_ref()
         .filter(|lock| lock.config_digest == expected_config_digest);
-    let entry_count = config.declared_entries()?.len();
-    let progress = SyncProgress::new(entry_count, quiet, verbose);
+    let declarations = config.declared_entries()?;
+    let progress = SyncProgress::new(
+        declarations.iter().map(|entry| entry.name.as_str()),
+        quiet,
+        verbose,
+    );
 
     if let Some(lock) = fresh_previous
         && lock.okr_version == env!("CARGO_PKG_VERSION")
         && {
-            progress.set_phase("Checking project state...");
-            let verification_progress = progress.entry("Verifying", "vendor tree");
-            let clean = verify_vendor(&project_directory, &config, lock).is_clean();
-            verification_progress.finish();
-            clean
+            progress.status("Verifying vendor tree");
+            verify_vendor(&project_directory, &config, lock).is_clean()
         }
         && manifests_exist(&project_directory, &config)
     {
         update_agents_file(&project_directory, &config)?;
         update_gitignore(&project_directory, &config)?;
         update_rbuildignore(&project_directory, &config)?;
-        progress.set_phase("Checking installed R library...");
-        let inspection_progress = progress.entry("Inspecting", "R library");
-        let coherence = check_coherence(lock, &crate::rlib::inspect_in(&project_directory));
-        inspection_progress.finish();
+        // R starts with the user's startup files and may write to the
+        // terminal, so the live display is closed before it runs.
         progress.finish();
+        let coherence = check_coherence(lock, &crate::rlib::inspect_in(&project_directory));
         emit_coherence(&config, lock, &coherence, quiet);
         if (args.strict || config.project.strict) && coherence.has_mismatches() {
             return Err(Error::Verification(format!(
@@ -698,7 +698,7 @@ fn run_sync(
     }
 
     let cache = Cache::from_environment()?;
-    let fetcher = Fetcher::new(cache, args.offline)?.with_progress(progress.clone());
+    let fetcher = Fetcher::new(cache, args.offline)?;
     let tools = HostTools::new();
     let github = TieredGithubApi::new(&tools)?;
     let resolution = resolve_with_progress(
@@ -717,20 +717,16 @@ fn run_sync(
         &tools,
         &progress,
     )?;
-    progress.set_phase("Writing lockfile...");
+    // What remains is quick to write, and R starts with the user's startup
+    // files and may write to the terminal, so the live display closes here.
+    progress.finish();
     let lock = Lockfile::build(&config, &resolution, &vendored)?;
     lock.write(&lock_path)?;
-    progress.advance("Wrote lockfile");
-    progress.set_phase("Writing manifests...");
     write_manifests(&config, &lock, &vendored)?;
     update_agents_file(&project_directory, &config)?;
     update_gitignore(&project_directory, &config)?;
     update_rbuildignore(&project_directory, &config)?;
-    progress.advance("Wrote manifests");
-    progress.set_phase("Checking installed R library...");
     let coherence = check_coherence(&lock, &crate::rlib::inspect_in(&project_directory));
-    progress.advance("Checked installed R library");
-    progress.finish();
 
     if !quiet {
         for warning in &vendored.warnings {

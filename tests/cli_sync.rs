@@ -30,8 +30,8 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
         .stdout(predicate::str::contains("synchronized 1 source entry"))
         .stdout(predicate::str::contains("sha256:").not())
         .stdout(predicate::str::contains("Rscript was not found"))
-        .stderr(predicate::str::contains("Resolving sources").not())
-        .stderr(predicate::str::contains("Preparing tinyone").not());
+        // Progress is drawn only on an interactive terminal.
+        .stderr(predicate::str::is_empty());
     let first_lock = fs::read(project.path().join("okr.lock")).unwrap();
     let first_json = fs::read(project.path().join("deps-src/_manifest.json")).unwrap();
     let first_markdown = fs::read(project.path().join("deps-src/_manifest.md")).unwrap();
@@ -110,6 +110,40 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
         .stdout(predicate::str::contains("\"schema\": 1"))
         .stdout(predicate::str::contains("\"path\": \".\""))
         .stdout(predicate::str::contains("\"mismatch\": \"modified\""));
+}
+
+#[test]
+fn verbose_sync_logs_each_source_without_a_terminal() {
+    let project = tempdir().unwrap();
+    let cache = project.path().join("cache");
+    let empty_path = project.path().join("empty-path");
+    fs::create_dir(&empty_path).unwrap();
+    write_cran_config(project.path());
+
+    okr(project.path(), &cache, &empty_path)
+        .args(["--verbose", "sync"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("synchronized 1 source entry"))
+        .stderr(predicate::str::contains("  ✓ tinyone  resolved 1.0.0\n"))
+        .stderr(predicate::str::contains("\nResolved 1 source in "))
+        .stderr(predicate::str::contains(
+            "\n  ✓ tinyone  vendored 1.0.0 (tarball)\n",
+        ))
+        .stderr(predicate::str::contains("\nVendored 1 source in "))
+        // A log has no styling and no live region to redraw.
+        .stderr(predicate::str::contains("\u{1b}").not())
+        .stderr(predicate::str::contains("Vendoring sources").not());
+
+    fs::remove_dir_all(project.path().join("deps-src")).unwrap();
+    fs::remove_file(project.path().join("okr.lock")).unwrap();
+    okr(project.path(), &cache, &empty_path)
+        .args(["--verbose", "sync", "--offline"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "\n  ✓ tinyone  vendored 1.0.0 (tarball, cached)\n",
+        ));
 }
 
 #[test]
@@ -233,7 +267,9 @@ fn file_git_reference_with_a_source_link_rebuilds_offline_from_the_normalized_cl
     okr(project.path(), &cache, Path::new(&normal_path))
         .arg("sync")
         .assert()
-        .success();
+        .success()
+        // Host tools run silently: nothing they print may reach the terminal.
+        .stderr(predicate::str::contains("git ").not());
     let first_lock = fs::read(project.path().join("okr.lock")).unwrap();
     let first_manifest = fs::read(project.path().join("deps-src/_manifest.json")).unwrap();
     let first_markdown = fs::read(project.path().join("deps-src/_manifest.md")).unwrap();

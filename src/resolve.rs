@@ -18,7 +18,7 @@ use crate::config::{Config, DeclaredEntry, DeclaredSource, EntryKind};
 use crate::fetch::Fetcher;
 use crate::hosttools::HostTools;
 use crate::lock::{FetchMethod, LockedPackage, LockedReference, Lockfile};
-use crate::progress::SyncProgress;
+use crate::progress::{Phase, SyncProgress};
 use crate::spec::{RemoteLocation, RemoteRef, RemoteSpec, RemoteType, is_full_commit_sha};
 use crate::{Error, Result};
 
@@ -431,7 +431,14 @@ pub fn resolve(
     github: &dyn GithubReleaseApi,
     previous: Option<&Lockfile>,
 ) -> Result<Resolution> {
-    resolve_inner(config, fetcher, tools, github, previous, None)
+    resolve_inner(
+        config,
+        fetcher,
+        tools,
+        github,
+        previous,
+        &SyncProgress::disabled(),
+    )
 }
 
 pub(crate) fn resolve_with_progress(
@@ -442,7 +449,7 @@ pub(crate) fn resolve_with_progress(
     previous: Option<&Lockfile>,
     progress: &SyncProgress,
 ) -> Result<Resolution> {
-    resolve_inner(config, fetcher, tools, github, previous, Some(progress))
+    resolve_inner(config, fetcher, tools, github, previous, progress)
 }
 
 fn resolve_inner(
@@ -451,19 +458,17 @@ fn resolve_inner(
     tools: &HostTools,
     github: &dyn GithubReleaseApi,
     previous: Option<&Lockfile>,
-    progress: Option<&SyncProgress>,
+    progress: &SyncProgress,
 ) -> Result<Resolution> {
     let declarations = config.declared_entries()?;
     let mut entries = Vec::with_capacity(declarations.len());
     let mut warnings = Vec::new();
     let mut snapshot_index = None;
 
-    if let Some(progress) = progress {
-        progress.set_phase("Resolving sources...");
-    }
+    progress.begin(Phase::Resolve, declarations.len());
     for declaration in declarations {
-        let entry_progress =
-            progress.map(|progress| progress.entry("Resolving", &declaration.name));
+        // Whatever resolving this entry fetches is reported against it.
+        let fetcher = &fetcher.for_task(progress.task(&declaration.name));
         let resolved = match &declaration.source {
             DeclaredSource::Cran { requested_version } => resolve_cran_entry(
                 config,
@@ -487,16 +492,44 @@ fn resolve_inner(
                 &mut warnings,
             )?,
         };
-        if let Some(entry_progress) = entry_progress {
-            entry_progress.finish();
-        }
-        if let Some(progress) = progress {
-            progress.advance(format!("Resolved {}", resolved.name));
-        }
+        fetcher.progress().done(&resolved_outcome(&resolved));
         entries.push(resolved);
     }
+    progress.complete();
 
     Ok(Resolution { entries, warnings })
+}
+
+/// What resolution settled on, as the short clause shown for a finished
+/// source.
+fn resolved_outcome(entry: &ResolvedEntry) -> String {
+    match &entry.source {
+        ResolvedSource::Cran { version, .. } => format!("resolved {version}"),
+        ResolvedSource::Archive { .. } => "resolved a pinned archive".to_owned(),
+        ResolvedSource::Git {
+            requested_ref,
+            locked_ref,
+            commit,
+            ..
+        } => {
+            let commit = short_commit(commit);
+            match (requested_ref.as_deref(), locked_ref.as_deref()) {
+                (Some(requested), _) if is_full_commit_sha(requested) => {
+                    format!("resolved pinned commit {commit}")
+                }
+                (Some(requested), Some(tag)) if requested == RemoteRef::LatestRelease.as_str() => {
+                    format!("resolved release {tag} to {commit}")
+                }
+                (Some(requested), _) => format!("resolved {requested} to {commit}"),
+                (None, _) => format!("resolved the default branch to {commit}"),
+            }
+        }
+    }
+}
+
+/// A commit SHA abbreviated for display.
+pub(crate) fn short_commit(commit: &str) -> &str {
+    commit.get(..7).unwrap_or(commit)
 }
 
 fn resolve_cran_entry(
@@ -535,6 +568,9 @@ fn resolve_cran_entry(
             Error::Config("project.snapshot is required for CRAN resolution".into())
         })?;
     if snapshot_index.is_none() {
+        fetcher
+            .progress()
+            .step(&format!("reading snapshot {snapshot} index"));
         *snapshot_index = Some(SnapshotIndex::load(
             fetcher,
             config.repository_url(),
@@ -635,16 +671,23 @@ fn resolve_remote_entry(
                     "@*release is supported only for GitHub forge specifications".into(),
                 ));
             };
+            fetcher.progress().step("finding the latest GitHub release");
             let release = github_api.latest_release(owner, repo)?;
             (release.commit, Some(release.tag), false)
         }
         Some(RemoteRef::Named(reference)) => {
+            fetcher
+                .progress()
+                .step(&format!("resolving {reference} via git ls-remote"));
             match tools.git_ls_remote(&clone_url, Some(reference)) {
                 Ok(resolved) => {
                     let branch = resolved.matched_ref.starts_with("refs/heads/");
                     (resolved.commit, Some(reference.clone()), branch)
                 }
                 Err(git_error) => {
+                    fetcher
+                        .progress()
+                        .step(&format!("resolving {reference} via the forge API"));
                     let commit = resolve_public_forge_ref(fetcher, spec, reference).map_err(
                         |api_error| {
                             Error::Fetch(format!(
@@ -657,10 +700,17 @@ fn resolve_remote_entry(
                 }
             }
         }
-        None => match tools.git_ls_remote(&clone_url, None) {
-            Ok(resolved) => (resolved.commit, None, true),
-            Err(git_error) => {
-                let commit = resolve_public_forge_ref(fetcher, spec, "HEAD").map_err(
+        None => {
+            fetcher
+                .progress()
+                .step("resolving the default branch via git ls-remote");
+            match tools.git_ls_remote(&clone_url, None) {
+                Ok(resolved) => (resolved.commit, None, true),
+                Err(git_error) => {
+                    fetcher
+                        .progress()
+                        .step("resolving the default branch via the forge API");
+                    let commit = resolve_public_forge_ref(fetcher, spec, "HEAD").map_err(
                         |api_error| {
                             Error::Fetch(format!(
                                 "could not resolve the default branch for {}: git ls-remote failed ({git_error}); public forge API fallback failed ({api_error})",
@@ -668,9 +718,10 @@ fn resolve_remote_entry(
                             ))
                         },
                     )?;
-                (commit, None, true)
+                    (commit, None, true)
+                }
             }
-        },
+        }
     };
 
     if spec.reference.is_none() {
@@ -1333,6 +1384,63 @@ mod tests {
             let spec = crate::spec::RemoteSpec::parse(raw).unwrap();
             let error = resolve_public_forge_ref(&fetcher, &spec, "release/1").unwrap_err();
             assert!(error.to_string().contains(expected_url), "{error}");
+        }
+    }
+
+    #[test]
+    fn finished_sources_say_what_resolution_settled_on() {
+        let commit = "9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c";
+        let git =
+            |requested_ref: Option<&str>, locked_ref: Option<&str>| super::ResolvedSource::Git {
+                source: "github::owner/repo".into(),
+                clone_url: "https://github.com/owner/repo.git".into(),
+                requested_ref: requested_ref.map(str::to_owned),
+                locked_ref: locked_ref.map(str::to_owned),
+                commit: commit.into(),
+                archive_url: None,
+                github: None,
+            };
+        for (source, expected) in [
+            (
+                super::ResolvedSource::Cran {
+                    version: "4.2.1".into(),
+                    url: "https://example.test/rpact_4.2.1.tar.gz".into(),
+                },
+                "resolved 4.2.1",
+            ),
+            (
+                super::ResolvedSource::Archive {
+                    source: "url::https://example.test/notes.zip".into(),
+                    url: "https://example.test/notes.zip".into(),
+                    reference: None,
+                },
+                "resolved a pinned archive",
+            ),
+            (
+                git(Some("v1.5.0"), Some("v1.5.0")),
+                "resolved v1.5.0 to 9f2c9f2",
+            ),
+            (git(None, None), "resolved the default branch to 9f2c9f2"),
+            (
+                git(Some("*release"), Some("v3.2.0")),
+                "resolved release v3.2.0 to 9f2c9f2",
+            ),
+            (
+                git(Some(commit), Some(commit)),
+                "resolved pinned commit 9f2c9f2",
+            ),
+        ] {
+            let entry = super::ResolvedEntry {
+                name: "entry".into(),
+                kind: crate::config::EntryKind::Package,
+                source,
+                exclude: Vec::new(),
+                include_tests: None,
+                declared_sha256: None,
+                expected_tree_digest: None,
+                preferred_fetch_method: None,
+            };
+            assert_eq!(super::resolved_outcome(&entry), expected);
         }
     }
 }
