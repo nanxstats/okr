@@ -1,6 +1,6 @@
 # Changelog
 
-## okr (development version)
+## okr 0.1.12
 
 ### Improvements
 
@@ -16,18 +16,18 @@
   rather than removed. A sync served from the cache therefore no longer
   flashes messages or shifts lines.
 - Keep one line per source in each stage under `--verbose`, with the resolved
-  version or commit, the fetch method, and the download size (#75). These
-  lines are also written when standard error is not a terminal. `--verbose`
-  no longer turns the interactive display off. Without `--verbose`, redirected
-  output still carries no progress.
+  version or commit, the fetch method, and the download size (#75).
+  These lines are also written when standard error is not a terminal.
+  `--verbose` no longer turns the interactive display off. Without `--verbose`,
+  redirected output still carries no progress.
 
 ### Bug fixes
 
-- Stop `git` from writing to the terminal during `okr sync` (#75). Clones
-  echoed their `$ git ...` command lines, even under `--quiet`, and a failing
-  `git ls-remote` printed its error before `okr` fell back to a forge API.
-  Both overwrote the progress display and left stale lines behind. A failing
-  `git` command now reports its own message as part of the `okr` error.
+- Stop `git` from writing to the terminal during `okr sync` (#75).
+  Clones echoed their `$ git ...` command lines, even under `--quiet`,
+  and a failing `git ls-remote` printed its error before `okr` fell back to
+  a forge API. Both overwrote the progress display and left stale lines behind.
+  A failing `git` command now reports its own message as part of the `okr` error.
 
 ## okr 0.1.11
 
