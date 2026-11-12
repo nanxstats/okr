@@ -71,13 +71,9 @@ impl HostTools {
                 format!("refs/tags/{reference}"),
                 format!("refs/tags/{reference}^{{}}"),
             ];
-            cmd!(shell, "git ls-remote --exit-code {url} {patterns...}")
-                .quiet()
-                .read()
+            capture(cmd!(shell, "git ls-remote --exit-code {url} {patterns...}"))
         } else {
-            cmd!(shell, "git ls-remote --exit-code --symref {url} HEAD")
-                .quiet()
-                .read()
+            capture(cmd!(shell, "git ls-remote --exit-code --symref {url} HEAD"))
         }
         .map_err(|error| {
             Error::Fetch(format!(
@@ -154,50 +150,44 @@ impl HostTools {
             branch_arguments.push(reference.to_owned());
             branch_arguments.push("--single-branch".to_owned());
         }
-        cmd!(
+        capture(cmd!(
             shell,
             "git -c core.autocrlf=false clone --quiet --depth 1 --no-checkout {branch_arguments...} {url} {destination}"
-        )
-        .run()
+        ))
         .map_err(|error| {
             Error::Fetch(format!(
                 "git clone failed for `{url}`; check the URL and your git credentials: {error}"
             ))
         })?;
-        cmd!(shell, "git -C {destination} config core.autocrlf false")
-            .quiet()
-            .run()
-            .map_err(|error| Error::Fetch(format!("could not configure clone: {error}")))?;
+        capture(cmd!(
+            shell,
+            "git -C {destination} config core.autocrlf false"
+        ))
+        .map_err(|error| Error::Fetch(format!("could not configure clone: {error}")))?;
 
-        let available = cmd!(shell, "git -C {destination} rev-parse HEAD")
-            .quiet()
-            .read()
+        let available = capture(cmd!(shell, "git -C {destination} rev-parse HEAD"))
             .map_err(|error| Error::Fetch(format!("could not inspect cloned HEAD: {error}")))?;
         if available.trim() != commit {
-            cmd!(
+            capture(cmd!(
                 shell,
                 "git -c core.autocrlf=false -C {destination} fetch --quiet --depth 1 origin {commit}"
-            )
-            .run()
+            ))
             .map_err(|error| {
                 Error::Fetch(format!(
                     "git could not fetch resolved commit {commit} from `{url}`: {error}"
                 ))
             })?;
         }
-        cmd!(
+        capture(cmd!(
             shell,
             "git -c core.autocrlf=false -C {destination} checkout --quiet --detach {commit}"
-        )
-        .run()
+        ))
         .map_err(|error| {
             Error::Fetch(format!(
                 "git could not check out resolved commit {commit}: {error}"
             ))
         })?;
-        let head = cmd!(shell, "git -C {destination} rev-parse HEAD")
-            .quiet()
-            .read()
+        let head = capture(cmd!(shell, "git -C {destination} rev-parse HEAD"))
             .map_err(|error| Error::Fetch(format!("could not verify cloned HEAD: {error}")))?;
         if head.trim() != commit {
             return Err(Error::Fetch(format!(
@@ -227,6 +217,34 @@ impl HostTools {
             )))
         }
     }
+}
+
+/// Run a host tool and return its standard output.
+///
+/// The tool is never echoed and never writes to the terminal, where
+/// `okr sync` may be drawing progress. When it fails, what it wrote to
+/// standard error becomes part of the error instead.
+fn capture(command: xshell::Cmd<'_>) -> std::result::Result<String, String> {
+    let description = command.to_string();
+    let output = command
+        .quiet()
+        .ignore_status()
+        .output()
+        .map_err(|error| error.to_string())?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr)
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
+        let separator = if detail.is_empty() { "" } else { ": " };
+        return Err(format!(
+            "`{description}` failed ({}){separator}{detail}",
+            output.status
+        ));
+    }
+    String::from_utf8(output.stdout)
+        .map(|stdout| stdout.trim_end().to_owned())
+        .map_err(|error| format!("`{description}` returned non-UTF-8 output: {error}"))
 }
 
 fn parse_ls_remote(output: &str, requested: Option<&str>) -> Option<ResolvedGitRef> {
@@ -291,7 +309,7 @@ mod tests {
     use tempfile::tempdir;
     use xshell::{Shell, cmd};
 
-    use super::{HostTools, command_on_explicit_path, parse_ls_remote};
+    use super::{HostTools, capture, command_on_explicit_path, parse_ls_remote};
 
     #[test]
     fn path_detection_requires_an_executable_file() {
@@ -311,6 +329,24 @@ mod tests {
             "missing",
             directory.path().as_os_str()
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn captured_tools_report_their_own_error_output() {
+        let shell = Shell::new().unwrap();
+        assert_eq!(
+            capture(cmd!(shell, "sh -c 'echo ready; echo noise >&2'")).unwrap(),
+            "ready"
+        );
+
+        let script = "printf 'fatal: first\\nsecond line\\n' >&2; exit 3";
+        let error = capture(cmd!(shell, "sh -c {script}")).unwrap_err();
+        assert!(error.starts_with("`sh -c "), "{error}");
+        assert!(
+            error.ends_with(" failed (exit status: 3): fatal: first second line"),
+            "{error}"
+        );
     }
 
     #[test]
