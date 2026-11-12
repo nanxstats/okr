@@ -17,9 +17,9 @@ use crate::digest::{TreeDigest, tree_digest};
 use crate::fetch::{CachedArtifact, Fetcher};
 use crate::hosttools::HostTools;
 use crate::lock::FetchMethod;
-use crate::progress::SyncProgress;
+use crate::progress::{Phase, SyncProgress, Task, display_host};
 use crate::resolve::dcf;
-use crate::resolve::{GithubRepository, Resolution, ResolvedEntry, ResolvedSource};
+use crate::resolve::{GithubRepository, Resolution, ResolvedEntry, ResolvedSource, short_commit};
 use crate::{Error, Result};
 
 const PACKAGE_EXCLUDES: &[&str] = &[
@@ -66,7 +66,14 @@ pub fn vendor(
     fetcher: &Fetcher,
     tools: &HostTools,
 ) -> Result<VendorResult> {
-    vendor_inner(project_directory, config, resolution, fetcher, tools, None)
+    vendor_inner(
+        project_directory,
+        config,
+        resolution,
+        fetcher,
+        tools,
+        &SyncProgress::disabled(),
+    )
 }
 
 pub(crate) fn vendor_with_progress(
@@ -83,7 +90,7 @@ pub(crate) fn vendor_with_progress(
         resolution,
         fetcher,
         tools,
-        Some(progress),
+        progress,
     )
 }
 
@@ -93,7 +100,7 @@ fn vendor_inner(
     resolution: &Resolution,
     fetcher: &Fetcher,
     tools: &HostTools,
-    progress: Option<&SyncProgress>,
+    progress: &SyncProgress,
 ) -> Result<VendorResult> {
     let target_root = project_directory.join(&config.vendor.path);
     let parent = target_root.parent().ok_or_else(|| {
@@ -109,11 +116,10 @@ fn vendor_inner(
     let mut entries = Vec::with_capacity(resolution.entries.len());
     let mut warnings = resolution.warnings.clone();
 
-    if let Some(progress) = progress {
-        progress.set_phase("Fetching and vendoring sources...");
-    }
+    progress.begin(Phase::Vendor, resolution.entries.len());
     for entry in &resolution.entries {
-        let entry_progress = progress.map(|progress| progress.entry("Preparing", &entry.name));
+        // Whatever vendoring this entry fetches is reported against it.
+        let fetcher = &fetcher.for_task(progress.task(&entry.name));
         let destination = staging.path().join(&entry.name);
         let vendored = vendor_entry(
             parent,
@@ -124,16 +130,11 @@ fn vendor_inner(
             tools,
             &mut warnings,
         )?;
-        if let Some(entry_progress) = entry_progress {
-            entry_progress.finish();
-        }
-        if let Some(progress) = progress {
-            progress.advance(format!("Prepared {}", entry.name));
-        }
         entries.push(vendored);
     }
 
     replace_directory(staging, &target_root)?;
+    progress.complete();
     Ok(VendorResult {
         root: target_root,
         entries,
@@ -151,9 +152,11 @@ fn vendor_entry(
     tools: &HostTools,
     warnings: &mut Vec<String>,
 ) -> Result<VendoredEntry> {
+    let progress = fetcher.progress();
     let acquisition = acquire(temporary_parent, entry, fetcher, tools, warnings)?;
-    let (raw, archive_method) = match acquisition {
+    let (raw, archive_method, cached) = match acquisition {
         Acquisition::Archive { artifact, method } => {
+            progress.step("extracting");
             let raw = TempBuilder::new()
                 .prefix(".okr-extract-")
                 .tempdir_in(temporary_parent)?;
@@ -164,18 +167,20 @@ fn vendor_entry(
                     artifact.path.display()
                 ))
             })?;
-            (raw, Some(method))
+            (raw, Some(method), artifact.from_cache)
         }
-        Acquisition::Clone { directory } => (directory, None),
+        Acquisition::Clone { directory } => (directory, None, false),
     };
 
     let include_tests = entry.include_tests.unwrap_or(config.vendor.include_tests);
     let mut user_excludes = config.vendor.exclude.clone();
     user_excludes.extend(entry.exclude.iter().cloned());
     let excludes = build_excludes(entry.kind, include_tests, &user_excludes)?;
+    progress.step("pruning");
     copy_pruned(raw.path(), destination, &excludes)?;
 
     let (version, license, title) = metadata(entry, destination)?;
+    progress.step("hashing");
     let tree = tree_digest(destination)?;
     if let Some(expected) = &entry.expected_tree_digest
         && tree.digest != *expected
@@ -188,12 +193,19 @@ fn vendor_entry(
     let fetch_method = match archive_method {
         Some(method) => method,
         None => {
+            progress.step("caching the clone");
             fetcher
                 .cache()
                 .put_normalized_tree(&clone_cache_key(entry), destination)?;
             FetchMethod::GitClone
         }
     };
+    progress.done(&vendored_outcome(
+        entry,
+        version.as_deref(),
+        fetch_method,
+        cached,
+    ));
 
     Ok(VendoredEntry {
         name: entry.name.clone(),
@@ -204,6 +216,23 @@ fn vendor_entry(
         fetch_method,
         tree,
     })
+}
+
+/// What was vendored and how it was acquired, as the short clause shown for
+/// a finished source.
+fn vendored_outcome(
+    entry: &ResolvedEntry,
+    version: Option<&str>,
+    method: FetchMethod,
+    cached: bool,
+) -> String {
+    let identity = match (version, &entry.source) {
+        (Some(version), _) => version,
+        (None, ResolvedSource::Git { commit, .. }) => short_commit(commit),
+        (None, _) => "the archive",
+    };
+    let cached = if cached { ", cached" } else { "" };
+    format!("vendored {identity} ({}{cached})", method.as_str())
 }
 
 enum Acquisition {
@@ -226,6 +255,7 @@ fn acquire(
 ) -> Result<Acquisition> {
     match &entry.source {
         ResolvedSource::Cran { url, .. } | ResolvedSource::Archive { url, .. } => {
+            fetcher.progress().step("downloading source archive");
             let artifact = fetcher.fetch_url(
                 url,
                 entry.declared_sha256.as_deref(),
@@ -283,6 +313,7 @@ fn acquire_git(
                         entry.name
                     ))
                 })?;
+                fetcher.progress().step("downloading forge archive");
                 let artifact =
                     fetcher.fetch_url(url, None, &format!("forge archive for {}", entry.name))?;
                 return Ok(Acquisition::Archive { artifact, method });
@@ -316,7 +347,14 @@ fn acquire_git(
                         entry.name
                     )));
                 }
-                return clone_source(temporary_parent, tools, clone_url, locked_ref, commit);
+                return clone_source(
+                    temporary_parent,
+                    fetcher.progress(),
+                    tools,
+                    clone_url,
+                    locked_ref,
+                    commit,
+                );
             }
             FetchMethod::Tarball => {
                 return Err(Error::Fetch(format!(
@@ -335,6 +373,7 @@ fn acquire_git(
     }
 
     if let Some(url) = archive_url {
+        fetcher.progress().step("downloading forge archive");
         match fetcher.fetch_url(url, None, &format!("forge archive for {}", entry.name)) {
             Ok(artifact) => {
                 return Ok(Acquisition::Archive {
@@ -364,7 +403,14 @@ fn acquire_git(
         }
     }
 
-    clone_source(temporary_parent, tools, clone_url, locked_ref, commit)
+    clone_source(
+        temporary_parent,
+        fetcher.progress(),
+        tools,
+        clone_url,
+        locked_ref,
+        commit,
+    )
 }
 
 fn gh_tarball_endpoint(github: &GithubRepository, commit: &str) -> String {
@@ -406,13 +452,16 @@ fn acquire_github_api_tarball(
     commit: &str,
 ) -> Result<CachedArtifact> {
     let mut failures = Vec::new();
+    fetcher.progress().step("checking gh authentication");
     if tools.gh_authenticated() {
+        fetcher.progress().step("downloading GitHub archive via gh");
         match acquire_with_gh(fetcher, tools, github, commit) {
             Ok(artifact) => return Ok(artifact),
             Err(error) => failures.push(format!("gh: {error}")),
         }
     }
     let url = github_api_tarball_url(github, commit);
+    fetcher.progress().step("downloading GitHub API archive");
     if let Some(token) = env::var("GITHUB_TOKEN")
         .ok()
         .filter(|token| !token.is_empty())
@@ -467,11 +516,13 @@ fn github_api_tarball_url(github: &GithubRepository, commit: &str) -> String {
 
 fn clone_source(
     temporary_parent: &Path,
+    progress: &Task,
     tools: &HostTools,
     clone_url: &str,
     reference: Option<&str>,
     commit: &str,
 ) -> Result<Acquisition> {
+    progress.step(&format!("cloning from {}", display_host(clone_url)));
     let directory = TempBuilder::new()
         .prefix(".okr-clone-")
         .tempdir_in(temporary_parent)?;
@@ -1795,5 +1846,46 @@ mod tests {
                 fs::copy(entry.path(), target).unwrap();
             }
         }
+    }
+
+    #[test]
+    fn finished_sources_say_what_was_vendored_and_how() {
+        let entry = |source| ResolvedEntry {
+            name: "entry".into(),
+            kind: EntryKind::Reference,
+            source,
+            exclude: Vec::new(),
+            include_tests: None,
+            declared_sha256: None,
+            expected_tree_digest: None,
+            preferred_fetch_method: None,
+        };
+        let git = entry(ResolvedSource::Git {
+            source: "github::owner/repo".into(),
+            clone_url: "https://github.com/owner/repo.git".into(),
+            requested_ref: None,
+            locked_ref: None,
+            commit: "9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c9f2c".into(),
+            archive_url: None,
+            github: None,
+        });
+        let archive = entry(ResolvedSource::Archive {
+            source: "url::https://example.test/notes.zip".into(),
+            url: "https://example.test/notes.zip".into(),
+            reference: None,
+        });
+
+        assert_eq!(
+            super::vendored_outcome(&git, Some("1.5.0"), FetchMethod::ForgeTarball, false),
+            "vendored 1.5.0 (forge-tarball)"
+        );
+        assert_eq!(
+            super::vendored_outcome(&git, None, FetchMethod::GitClone, false),
+            "vendored 9f2c9f2 (git-clone)"
+        );
+        assert_eq!(
+            super::vendored_outcome(&archive, None, FetchMethod::Tarball, true),
+            "vendored the archive (tarball, cached)"
+        );
     }
 }

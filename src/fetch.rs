@@ -12,7 +12,7 @@ use tar::{Builder as TarBuilder, Header};
 use tempfile::NamedTempFile;
 
 use crate::digest::{sha256_bytes, sha256_file, tree_digest};
-use crate::progress::SyncProgress;
+use crate::progress::{Task, Transfer};
 use crate::{Error, Result};
 
 const ARTIFACTS_DIRECTORY: &str = "artifacts";
@@ -240,7 +240,7 @@ pub struct Fetcher {
     cache: Cache,
     client: Client,
     offline: bool,
-    progress: Option<SyncProgress>,
+    progress: Task,
 }
 
 impl Fetcher {
@@ -253,14 +253,25 @@ impl Fetcher {
             cache,
             client,
             offline,
-            progress: None,
+            progress: Task::disabled(),
         })
     }
 
+    /// A fetcher over the same cache and connections that reports the work
+    /// it does to `task`. Each source is fetched through its own.
     #[must_use]
-    pub(crate) fn with_progress(mut self, progress: SyncProgress) -> Self {
-        self.progress = Some(progress);
-        self
+    pub(crate) fn for_task(&self, task: Task) -> Self {
+        Self {
+            cache: self.cache.clone(),
+            client: self.client.clone(),
+            offline: self.offline,
+            progress: task,
+        }
+    }
+
+    /// The progress of the source this fetcher is working on.
+    pub(crate) const fn progress(&self) -> &Task {
+        &self.progress
     }
 
     #[must_use]
@@ -331,6 +342,7 @@ impl Fetcher {
             return self.cache.put_file(&key, &path, expected_sha256).map(Some);
         }
 
+        let transfer = self.progress.transfer(url);
         let response = self.client.get(url).send().map_err(|error| {
             Error::Fetch(format!("could not fetch {label} from {url}: {error}"))
         })?;
@@ -343,7 +355,7 @@ impl Fetcher {
                 response.status()
             )));
         }
-        self.cache_response(&key, response, expected_sha256, label)
+        self.cache_response(&key, response, expected_sha256, &transfer)
             .map(Some)
     }
 
@@ -362,6 +374,7 @@ impl Fetcher {
                 "offline mode: missing cached artifact for {label} ({url})"
             )));
         }
+        let transfer = self.progress.transfer(url);
         let response = self
             .client
             .get(url)
@@ -377,7 +390,7 @@ impl Fetcher {
                 response.status()
             )));
         }
-        self.cache_response(&key, response, None, label)
+        self.cache_response(&key, response, None, &transfer)
     }
 
     pub fn get_json<T: DeserializeOwned>(&self, url: &str, label: &str) -> Result<T> {
@@ -408,22 +421,11 @@ impl Fetcher {
         key: &str,
         response: Response,
         expected_sha256: Option<&str>,
-        label: &str,
+        transfer: &Transfer,
     ) -> Result<CachedArtifact> {
-        let transfer = self
-            .progress
-            .as_ref()
-            .map(|progress| progress.download(label, response.content_length()));
-        let result = if let Some(transfer) = &transfer {
-            self.cache
-                .put_reader(key, transfer.wrap_read(response), expected_sha256)
-        } else {
-            self.cache.put_reader(key, response, expected_sha256)
-        };
-        if let Some(transfer) = transfer {
-            transfer.finish();
-        }
-        result
+        transfer.set_length(response.content_length());
+        self.cache
+            .put_reader(key, transfer.wrap_read(response), expected_sha256)
     }
 }
 
@@ -493,8 +495,9 @@ fn encode_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::io::{Read as _, Write as _};
+    use std::io::{self, Read as _, Write as _};
     use std::net::TcpListener;
+    use std::sync::{Arc, Mutex};
     use std::thread;
 
     use flate2::read::GzDecoder;
@@ -502,6 +505,22 @@ mod tests {
 
     use super::{Cache, Fetcher};
     use crate::digest::sha256_bytes;
+    use crate::progress::SyncProgress;
+
+    /// A progress log the test can read back.
+    #[derive(Clone, Default)]
+    struct Log(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for Log {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
 
     #[test]
     fn content_is_stored_by_verified_digest() {
@@ -580,6 +599,50 @@ mod tests {
         server.join().unwrap();
         assert_eq!(result, None);
         assert_eq!(fetcher.cache().stats().unwrap().artifacts, 0);
+    }
+
+    #[test]
+    fn downloads_are_reported_to_the_task_of_the_fetcher() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0_u8; 1024];
+            let bytes_read = stream.read(&mut request).unwrap();
+            assert!(bytes_read > 0);
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 13\r\nConnection: close\r\n\r\nfixture bytes",
+                )
+                .unwrap();
+        });
+        let directory = tempdir().unwrap();
+        let log = Log::default();
+        let progress = SyncProgress::log(Box::new(log.clone()), 8);
+        let url = format!("http://{address}/fixture.tar.gz");
+
+        let fetcher = Fetcher::new(Cache::new(directory.path()), false).unwrap();
+        let scoped = fetcher.for_task(progress.task("fixture"));
+        let downloaded = scoped.fetch_url(&url, None, "fixture").unwrap();
+        scoped.progress().done("fetched");
+        server.join().unwrap();
+        assert_eq!(fs::read(&downloaded.path).unwrap(), b"fixture bytes");
+
+        // A cache hit transfers nothing, and the scoped fetcher shares the
+        // cache of the fetcher it came from.
+        let scoped = fetcher.for_task(progress.task("again"));
+        assert!(scoped.fetch_url(&url, None, "fixture").unwrap().from_cache);
+        scoped.progress().done("fetched");
+
+        let log = String::from_utf8(log.0.lock().unwrap().clone()).unwrap();
+        let mut lines = log.lines();
+        let first = lines.next().unwrap();
+        assert!(
+            first.starts_with("  ✓ fixture  fetched · downloaded 13 B in "),
+            "{log}"
+        );
+        assert_eq!(lines.next(), Some("  ✓ again    fetched"));
+        assert_eq!(lines.next(), None);
     }
 
     #[test]
