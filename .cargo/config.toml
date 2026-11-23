@@ -1,8 +1,3 @@
-# Dependency cooldown (Cargo 1.100+; older Cargo ignores this key).
-# When resolving, Cargo skips registry versions published within the window
-# unless they are already in Cargo.lock, so a compromised release has time
-# to be caught and yanked before `cargo update` adopts it.
-# To take an urgent fix early, run:
-#   CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update <crate> --precise <version>
+# Dependency cooldown (Cargo 1.100+): skip crate versions published in the last 7 days.
 [registry]
 global-min-publish-age = "7 days"

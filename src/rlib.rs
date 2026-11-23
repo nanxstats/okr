@@ -417,12 +417,8 @@ mod tests {
         );
     }
 
-    /// Writes an executable fake `Rscript` without this process ever opening it
-    /// for writing. Linux refuses to execute a file that any process holds open
-    /// for writing (`ETXTBSY`), and other tests spawn `git` concurrently: a child
-    /// forked while `fs::write` held the file open keeps that descriptor until
-    /// it execs. Writing through a short-lived `sh` confines the descriptor to
-    /// a process that has exited before the script runs.
+    /// Writes the script from a child `sh` so that no concurrently forked test
+    /// process inherits a writable descriptor and fails the exec with `ETXTBSY`.
     #[cfg(unix)]
     fn write_fake_rscript(path: &Path, script: &str) {
         let status = Command::new("sh")

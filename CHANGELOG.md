@@ -6,6 +6,11 @@
 
 - Adopt a 7-day dependency cooldown for development with Cargo 1.100+ (#79).
 
+### Testing
+
+- Fix an intermittent `ETXTBSY` failure in the fake `Rscript` unit tests on
+  Linux by writing the script from a child process (#79).
+
 ## okr 0.1.12
 
 ### Improvements
