@@ -26,9 +26,6 @@ jobs:
         with:
           path: site
 
-  # Deploy from a separate job. In the same job, deploy-pages can look up the
-  # artifact before it is listed, and a re-run then finds two of them
-  # (actions/deploy-pages#451). Re-run only this job if a deploy fails.
   deploy:
     needs: build
     environment:
