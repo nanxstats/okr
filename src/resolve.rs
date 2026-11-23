@@ -14,7 +14,7 @@ use reqwest::StatusCode;
 use reqwest::blocking::Client;
 use serde::de::DeserializeOwned;
 
-use crate::config::{Config, DeclaredEntry, DeclaredSource, EntryKind};
+use crate::config::{Config, DeclaredEntry, DeclaredSource, EntryKind, Repository};
 use crate::fetch::Fetcher;
 use crate::hosttools::HostTools;
 use crate::lock::{FetchMethod, LockedPackage, LockedReference, Lockfile};
@@ -80,8 +80,10 @@ pub struct CranResolution {
     pub archived: bool,
 }
 
+/// The source package versions that a repository's `PACKAGES` index lists.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SnapshotIndex {
+pub struct RepositoryIndex {
+    repository: Repository,
     versions: BTreeMap<String, String>,
 }
 
@@ -106,13 +108,23 @@ fn compare_package_versions(left: &str, right: &str) -> Ordering {
     }
 }
 
-impl SnapshotIndex {
-    pub fn load(fetcher: &Fetcher, repository: &str, snapshot: &str) -> Result<Self> {
-        let url = format!(
-            "{}/{snapshot}/src/contrib/PACKAGES.gz",
-            repository.trim_end_matches('/')
-        );
-        let artifact = fetcher.fetch_url(&url, None, "snapshot PACKAGES index")?;
+impl RepositoryIndex {
+    pub fn load(fetcher: &Fetcher, repository: &Repository) -> Result<Self> {
+        let url = repository.index_url();
+        let artifact = if repository.is_fixed() {
+            fetcher.fetch_url(&url, None, "snapshot PACKAGES index")?
+        } else {
+            // Nothing says that the index behind a `repo-url` is immutable,
+            // so it is read again whenever the network allows. A cached copy
+            // only stands in for it offline.
+            fetcher
+                .refresh_url_if_exists(&url, "repository PACKAGES index")?
+                .ok_or_else(|| {
+                    Error::Fetch(format!(
+                        "could not find a package index at {url}; project.repo-url must be the root of a CRAN-like repository, the URL that contains `src/contrib`"
+                    ))
+                })?
+        };
         let file = File::open(&artifact.path)?;
         let mut decoder = GzDecoder::new(file);
         let mut contents = String::new();
@@ -149,27 +161,25 @@ impl SnapshotIndex {
                 }
             }
         }
-        Ok(Self { versions })
+        Ok(Self {
+            repository: repository.clone(),
+            versions,
+        })
     }
 
-    pub fn resolve(
-        &self,
-        repository: &str,
-        snapshot: &str,
-        name: &str,
-        requested_version: Option<&str>,
-    ) -> Result<CranResolution> {
-        let repository = repository.trim_end_matches('/');
+    pub fn resolve(&self, name: &str, requested_version: Option<&str>) -> Result<CranResolution> {
+        let contrib = format!("{}/src/contrib", self.repository.url());
         match requested_version {
             None => {
                 let version = self.versions.get(name).ok_or_else(|| {
                     Error::Fetch(format!(
-                        "package `{name}` is not present in snapshot {snapshot}"
+                        "package `{name}` is not present in {}",
+                        self.repository
                     ))
                 })?;
                 Ok(CranResolution {
                     version: version.clone(),
-                    url: format!("{repository}/{snapshot}/src/contrib/{name}_{version}.tar.gz"),
+                    url: format!("{contrib}/{name}_{version}.tar.gz"),
                     archived: false,
                 })
             }
@@ -181,15 +191,13 @@ impl SnapshotIndex {
             {
                 Ok(CranResolution {
                     version: version.to_owned(),
-                    url: format!("{repository}/{snapshot}/src/contrib/{name}_{version}.tar.gz"),
+                    url: format!("{contrib}/{name}_{version}.tar.gz"),
                     archived: false,
                 })
             }
             Some(version) => Ok(CranResolution {
                 version: version.to_owned(),
-                url: format!(
-                    "{repository}/{snapshot}/src/contrib/Archive/{name}/{name}_{version}.tar.gz"
-                ),
+                url: format!("{contrib}/Archive/{name}/{name}_{version}.tar.gz"),
                 archived: true,
             }),
         }
@@ -463,7 +471,7 @@ fn resolve_inner(
     let declarations = config.declared_entries()?;
     let mut entries = Vec::with_capacity(declarations.len());
     let mut warnings = Vec::new();
-    let mut snapshot_index = None;
+    let mut repository_index = None;
 
     progress.begin(Phase::Resolve, declarations.len());
     for declaration in declarations {
@@ -476,7 +484,8 @@ fn resolve_inner(
                 previous,
                 &declaration,
                 requested_version,
-                &mut snapshot_index,
+                &mut repository_index,
+                &mut warnings,
             )?,
             DeclaredSource::Remote {
                 spec,
@@ -538,7 +547,8 @@ fn resolve_cran_entry(
     previous: Option<&Lockfile>,
     declaration: &DeclaredEntry,
     requested_version: &Option<String>,
-    snapshot_index: &mut Option<SnapshotIndex>,
+    repository_index: &mut Option<RepositoryIndex>,
+    warnings: &mut Vec<String>,
 ) -> Result<ResolvedEntry> {
     if fetcher.is_offline()
         && let Some(prior) = previous_package(previous, &declaration.name)
@@ -563,31 +573,36 @@ fn resolve_cran_entry(
         });
     }
 
-    let snapshot =
-        config.project.snapshot.as_deref().ok_or_else(|| {
-            Error::Config("project.snapshot is required for CRAN resolution".into())
-        })?;
-    if snapshot_index.is_none() {
-        fetcher
-            .progress()
-            .step(&format!("reading snapshot {snapshot} index"));
-        *snapshot_index = Some(SnapshotIndex::load(
-            fetcher,
-            config.repository_url(),
-            snapshot,
-        )?);
+    let index = match repository_index {
+        Some(index) => index,
+        None => {
+            let repository = config.repository().ok_or_else(|| {
+                Error::Config(
+                    "project.snapshot or project.repo-url is required for CRAN resolution".into(),
+                )
+            })?;
+            fetcher.progress().step(&match repository.snapshot_date() {
+                Some(date) => format!("reading snapshot {date} index"),
+                None => "reading the repository index".to_owned(),
+            });
+            repository_index.insert(RepositoryIndex::load(fetcher, &repository)?)
+        }
+    };
+    let cran = index.resolve(&declaration.name, requested_version.as_deref())?;
+    let locked =
+        previous_package(previous, &declaration.name).filter(|prior| prior.source == "cran");
+    if requested_version.is_none()
+        && let Some(locked) = locked
+        && locked.version != cran.version
+    {
+        // The lock belongs to this configuration, so the same repository
+        // listed another version when the lock was written.
+        warnings.push(format!(
+            "{} was locked at version {}, but {} now lists {}; that version will be locked",
+            declaration.name, locked.version, index.repository, cran.version
+        ));
     }
-    let cran = snapshot_index
-        .as_ref()
-        .expect("snapshot index was loaded")
-        .resolve(
-            config.repository_url(),
-            snapshot,
-            &declaration.name,
-            requested_version.as_deref(),
-        )?;
-    let prior = previous_package(previous, &declaration.name)
-        .filter(|prior| prior.source == "cran" && prior.version == cran.version);
+    let prior = locked.filter(|prior| prior.version == cran.version);
     Ok(ResolvedEntry {
         name: declaration.name.clone(),
         kind: declaration.kind,
@@ -1060,6 +1075,7 @@ fn validate_api_commit(commit: &str) -> Result<()> {
 mod tests {
     use std::fs;
     use std::io::Write;
+    use std::path::Path;
 
     use flate2::Compression;
     use flate2::write::GzEncoder;
@@ -1067,14 +1083,15 @@ mod tests {
 
     use super::{
         GithubApiMethod, GithubHttpError, GithubRelease, GithubReleaseApi, GithubReleaseHttpError,
-        GithubRepository, ResolvedSource, SnapshotIndex, archive_for, classify_release_http_error,
-        compare_package_versions, encode_path_segment, github_http_status_error,
-        no_latest_github_release_error, resolve, resolve_public_forge_ref, split_git_host_path,
+        GithubRepository, RepositoryIndex, ResolvedSource, archive_for,
+        classify_release_http_error, compare_package_versions, encode_path_segment,
+        github_http_status_error, no_latest_github_release_error, resolve,
+        resolve_public_forge_ref, split_git_host_path,
     };
-    use crate::config::Config;
+    use crate::config::{Config, Repository};
     use crate::fetch::{Cache, Fetcher};
     use crate::hosttools::HostTools;
-    use crate::lock::{FetchMethod, LockedReference, Lockfile};
+    use crate::lock::{FetchMethod, LockedPackage, LockedReference, Lockfile};
 
     struct StubGithub;
 
@@ -1089,100 +1106,278 @@ mod tests {
         }
     }
 
-    #[test]
-    fn snapshot_resolution_is_lookup_and_archive_fallback_only() {
-        let root = tempdir().unwrap();
-        let contrib = root.path().join("2026-06-30/src/contrib");
+    /// Gzip a `PACKAGES` index.
+    fn gzip(stanzas: &[u8]) -> Vec<u8> {
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::default());
+        gzip.write_all(stanzas).unwrap();
+        gzip.finish().unwrap()
+    }
+
+    /// Write a `PACKAGES.gz` index below `root` and return the repository
+    /// rooted there.
+    fn write_repository(root: &Path, stanzas: &[u8]) -> Repository {
+        let contrib = root.join("src/contrib");
         fs::create_dir_all(&contrib).unwrap();
-        let file = fs::File::create(contrib.join("PACKAGES.gz")).unwrap();
-        let mut gzip = GzEncoder::new(file, Compression::default());
-        gzip.write_all(b"Package: alpha\nVersion: 2.0.0\n\nPackage: beta\nVersion: 1.5.0\n")
-            .unwrap();
-        gzip.finish().unwrap();
-        let repository = format!("file://{}", root.path().display());
+        fs::write(contrib.join("PACKAGES.gz"), gzip(stanzas)).unwrap();
+        Repository::at(&format!("file://{}", root.display()))
+    }
+
+    #[test]
+    fn repository_resolution_is_lookup_and_archive_fallback_only() {
+        let root = tempdir().unwrap();
+        let repository = write_repository(
+            &root.path().join("repository"),
+            b"Package: alpha\nVersion: 2.0.0\n\nPackage: beta\nVersion: 1.5.0\n",
+        );
         let cache = Cache::new(root.path().join("cache"));
         let fetcher = Fetcher::new(cache, false).unwrap();
-        let index = SnapshotIndex::load(&fetcher, &repository, "2026-06-30").unwrap();
+        let index = RepositoryIndex::load(&fetcher, &repository).unwrap();
+        let contrib = format!("{}/src/contrib", repository.url());
 
-        let latest = index
-            .resolve(&repository, "2026-06-30", "alpha", None)
-            .unwrap();
+        let latest = index.resolve("alpha", None).unwrap();
         assert_eq!(latest.version, "2.0.0");
+        assert_eq!(latest.url, format!("{contrib}/alpha_2.0.0.tar.gz"));
         assert!(!latest.archived);
 
-        let current = index
-            .resolve(&repository, "2026-06-30", "alpha", Some("2.0.0"))
-            .unwrap();
+        let current = index.resolve("alpha", Some("2.0.0")).unwrap();
+        assert_eq!(current.url, latest.url);
         assert!(!current.archived);
 
-        let old = index
-            .resolve(&repository, "2026-06-30", "alpha", Some("1.0.0"))
-            .unwrap();
+        let old = index.resolve("alpha", Some("1.0.0")).unwrap();
         assert!(old.archived);
-        assert!(old.url.ends_with("/Archive/alpha/alpha_1.0.0.tar.gz"));
-
-        assert!(
-            index
-                .resolve(&repository, "2026-06-30", "missing", None)
-                .is_err()
+        assert_eq!(
+            old.url,
+            format!("{contrib}/Archive/alpha/alpha_1.0.0.tar.gz")
         );
-        let archived_missing = index
-            .resolve(&repository, "2026-06-30", "missing", Some("0.1.0"))
-            .unwrap();
+
+        let missing = index.resolve("missing", None).unwrap_err();
+        assert_eq!(
+            missing.to_string(),
+            format!(
+                "package `missing` is not present in the repository at {}",
+                repository.url()
+            )
+        );
+        let archived_missing = index.resolve("missing", Some("0.1.0")).unwrap();
         assert!(archived_missing.archived);
     }
 
     #[test]
-    fn snapshot_index_accepts_same_version_recommended_package_duplicates() {
+    fn a_repo_url_is_read_as_written_whatever_its_path_looks_like() {
+        // Regression test for #78: the path of a repository does not have to
+        // end in, or contain, a `YYYY-MM-DD` snapshot date.
         let root = tempdir().unwrap();
-        let contrib = root.path().join("2026-06-30/src/contrib");
-        fs::create_dir_all(&contrib).unwrap();
-        let file = fs::File::create(contrib.join("PACKAGES.gz")).unwrap();
-        let mut gzip = GzEncoder::new(file, Compression::default());
-        gzip.write_all(
-            b"Package: boot\nVersion: 1.3-32\nPath: 4.7.0/Recommended\nPriority: recommended\n\nPackage: boot\nVersion: 1.3-32\nPriority: recommended\n",
-        )
-        .unwrap();
-        gzip.finish().unwrap();
-        let repository = format!("file://{}", root.path().display());
         let fetcher = Fetcher::new(Cache::new(root.path().join("cache")), false).unwrap();
+        for path in [
+            "cran/2026-06-30+Y3JhbiwyOjQ1MjYyMTU7",
+            "internal/latest",
+            "cran/__linux__/noble/2026-06-30",
+            "mirror",
+        ] {
+            let repository =
+                write_repository(&root.path().join(path), b"Package: alpha\nVersion: 2.0.0\n");
+            assert!(repository.url().ends_with(path));
 
-        let index = SnapshotIndex::load(&fetcher, &repository, "2026-06-30").unwrap();
-        let resolved = index
-            .resolve(&repository, "2026-06-30", "boot", None)
+            let index = RepositoryIndex::load(&fetcher, &repository).unwrap();
+            assert_eq!(
+                index.resolve("alpha", None).unwrap().url,
+                format!("{}/src/contrib/alpha_2.0.0.tar.gz", repository.url())
+            );
+        }
+    }
+
+    #[test]
+    fn a_repo_url_index_is_read_again_online_and_replayed_offline() {
+        let root = tempdir().unwrap();
+        let directory = root.path().join("repository");
+        let cache = Cache::new(root.path().join("cache"));
+        let online = Fetcher::new(cache.clone(), false).unwrap();
+        let offline = Fetcher::new(cache, true).unwrap();
+        let version = |fetcher: &Fetcher, repository: &Repository| {
+            RepositoryIndex::load(fetcher, repository)
+                .unwrap()
+                .resolve("alpha", None)
+                .unwrap()
+                .version
+        };
+
+        let repository = write_repository(&directory, b"Package: alpha\nVersion: 1.0.0\n");
+        assert_eq!(version(&online, &repository), "1.0.0");
+
+        // okr cannot know that a `repo-url` names a fixed snapshot, so an
+        // index that moved is seen by the next online resolution.
+        write_repository(&directory, b"Package: alpha\nVersion: 1.1.0\n");
+        assert_eq!(version(&online, &repository), "1.1.0");
+
+        fs::remove_dir_all(&directory).unwrap();
+        assert_eq!(version(&offline, &repository), "1.1.0");
+    }
+
+    #[test]
+    fn a_dated_snapshot_index_is_fixed_and_served_from_the_cache() {
+        let root = tempdir().unwrap();
+        let cache = Cache::new(root.path().join("cache"));
+        let repository = Repository::snapshot("2026-06-30");
+        assert_eq!(
+            repository.index_url(),
+            "https://packagemanager.posit.co/cran/2026-06-30/src/contrib/PACKAGES.gz"
+        );
+        cache
+            .put_bytes(
+                &format!("url:{}", repository.index_url()),
+                &gzip(b"Package: alpha\nVersion: 2.0.0\n"),
+                None,
+            )
             .unwrap();
 
-        assert_eq!(resolved.version, "1.3-32");
-        assert_eq!(
-            resolved.url,
-            format!("{repository}/2026-06-30/src/contrib/boot_1.3-32.tar.gz")
+        // The snapshot is immutable, so the cached index answers even an
+        // online resolution, and nothing is requested from the network.
+        for offline in [false, true] {
+            let fetcher = Fetcher::new(cache.clone(), offline).unwrap();
+            let index = RepositoryIndex::load(&fetcher, &repository).unwrap();
+            assert_eq!(
+                index.resolve("alpha", None).unwrap().url,
+                "https://packagemanager.posit.co/cran/2026-06-30/src/contrib/alpha_2.0.0.tar.gz"
+            );
+            assert_eq!(
+                index.resolve("missing", None).unwrap_err().to_string(),
+                "package `missing` is not present in snapshot 2026-06-30"
+            );
+        }
+    }
+
+    #[test]
+    fn a_repo_url_without_an_index_explains_what_the_url_must_name() {
+        let root = tempdir().unwrap();
+        let fetcher = Fetcher::new(Cache::new(root.path().join("cache")), false).unwrap();
+        let repository = Repository::at(&format!("file://{}/src/contrib", root.path().display()));
+
+        let error = RepositoryIndex::load(&fetcher, &repository).unwrap_err();
+        assert_eq!(error.exit_code(), 3);
+        let message = error.to_string();
+        assert!(
+            message.contains(&format!(
+                "could not find a package index at {}",
+                repository.index_url()
+            )),
+            "{message}"
+        );
+        assert!(
+            message.contains("project.repo-url must be the root of a CRAN-like repository"),
+            "{message}"
         );
     }
 
     #[test]
-    fn snapshot_index_chooses_greatest_conflicting_duplicate_version() {
+    fn a_wildcard_version_that_moved_since_the_lock_is_reported() {
         let root = tempdir().unwrap();
-        let contrib = root.path().join("2026-06-30/src/contrib");
-        fs::create_dir_all(&contrib).unwrap();
-        let file = fs::File::create(contrib.join("PACKAGES.gz")).unwrap();
-        let mut gzip = GzEncoder::new(file, Compression::default());
-        gzip.write_all(
-            b"Package: cluster\nVersion: 2.1.8.2\nPath: 4.7.0/Recommended\nPriority: recommended\n\nPackage: cluster\nVersion: 2.1.8.3\nPriority: recommended\n",
-        )
+        let repository = write_repository(
+            &root.path().join("repository"),
+            b"Package: alpha\nVersion: 1.1.0\n\nPackage: beta\nVersion: 1.5.0\n\nPackage: gamma\nVersion: 3.0.0\n",
+        );
+        let config = Config::parse(&format!(
+            "[project]\nrepo-url = \"{}\"\n[packages]\nalpha = \"*\"\nbeta = \"*\"\ngamma = \"2.0.0\"\n",
+            repository.url()
+        ))
         .unwrap();
-        gzip.finish().unwrap();
-        let repository = format!("file://{}", root.path().display());
+        let locked = |name: &str, version: &str| LockedPackage {
+            name: name.into(),
+            version: version.into(),
+            source: "cran".into(),
+            url: Some(format!(
+                "{}/src/contrib/{name}_{version}.tar.gz",
+                repository.url()
+            )),
+            reference: None,
+            commit: None,
+            fetch_method: FetchMethod::Tarball,
+            tree_digest: format!("sha256:{}", "e".repeat(64)),
+            license: None,
+        };
+        let lock = Lockfile {
+            version: crate::lock::LOCK_VERSION,
+            okr_version: env!("CARGO_PKG_VERSION").into(),
+            generated: "1970-01-01T00:00:00Z".into(),
+            snapshot: None,
+            config_digest: "sha256:x".into(),
+            environment_digest: "sha256:y".into(),
+            packages: vec![
+                locked("alpha", "1.0.0"),
+                locked("beta", "1.5.0"),
+                locked("gamma", "2.0.0"),
+            ],
+            references: Vec::new(),
+        };
         let fetcher = Fetcher::new(Cache::new(root.path().join("cache")), false).unwrap();
 
-        let index = SnapshotIndex::load(&fetcher, &repository, "2026-06-30").unwrap();
-        let resolved = index
-            .resolve(&repository, "2026-06-30", "cluster", None)
-            .unwrap();
+        let resolution = resolve(
+            &config,
+            &fetcher,
+            &HostTools::new(),
+            &StubGithub,
+            Some(&lock),
+        )
+        .unwrap();
+
+        // Only `alpha` follows the index and moved. `beta` still resolves to
+        // its locked version, and `gamma` is pinned by its declaration.
+        assert_eq!(
+            resolution.warnings,
+            [format!(
+                "alpha was locked at version 1.0.0, but the repository at {} now lists 1.1.0; that version will be locked",
+                repository.url()
+            )]
+        );
+        let expectations = resolution
+            .entries
+            .iter()
+            .map(|entry| (entry.name.as_str(), entry.expected_tree_digest.is_some()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            expectations,
+            [("alpha", false), ("beta", true), ("gamma", true)]
+        );
+
+        // Without a lock there is nothing to have moved from.
+        let unlocked = resolve(&config, &fetcher, &HostTools::new(), &StubGithub, None).unwrap();
+        assert!(unlocked.warnings.is_empty());
+    }
+
+    #[test]
+    fn repository_index_accepts_same_version_recommended_package_duplicates() {
+        let root = tempdir().unwrap();
+        let repository = write_repository(
+            &root.path().join("repository"),
+            b"Package: boot\nVersion: 1.3-32\nPath: 4.7.0/Recommended\nPriority: recommended\n\nPackage: boot\nVersion: 1.3-32\nPriority: recommended\n",
+        );
+        let fetcher = Fetcher::new(Cache::new(root.path().join("cache")), false).unwrap();
+
+        let index = RepositoryIndex::load(&fetcher, &repository).unwrap();
+        let resolved = index.resolve("boot", None).unwrap();
+
+        assert_eq!(resolved.version, "1.3-32");
+        assert_eq!(
+            resolved.url,
+            format!("{}/src/contrib/boot_1.3-32.tar.gz", repository.url())
+        );
+    }
+
+    #[test]
+    fn repository_index_chooses_greatest_conflicting_duplicate_version() {
+        let root = tempdir().unwrap();
+        let repository = write_repository(
+            &root.path().join("repository"),
+            b"Package: cluster\nVersion: 2.1.8.2\nPath: 4.7.0/Recommended\nPriority: recommended\n\nPackage: cluster\nVersion: 2.1.8.3\nPriority: recommended\n",
+        );
+        let fetcher = Fetcher::new(Cache::new(root.path().join("cache")), false).unwrap();
+
+        let index = RepositoryIndex::load(&fetcher, &repository).unwrap();
+        let resolved = index.resolve("cluster", None).unwrap();
 
         assert_eq!(resolved.version, "2.1.8.3");
         assert_eq!(
             resolved.url,
-            format!("{repository}/2026-06-30/src/contrib/cluster_2.1.8.3.tar.gz")
+            format!("{}/src/contrib/cluster_2.1.8.3.tar.gz", repository.url())
         );
     }
 

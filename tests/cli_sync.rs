@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use std::thread;
 
 use assert_cmd::cargo::cargo_bin_cmd;
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use predicates::prelude::*;
 use tempfile::tempdir;
 use xshell::{Shell, cmd};
@@ -38,6 +40,20 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
     let lock_text = String::from_utf8(first_lock.clone()).unwrap();
     let manifest: serde_json::Value = serde_json::from_slice(&first_json).unwrap();
     assert!(lock_text.starts_with("version = 2\n"));
+    // The repository is the `repo-url` exactly as written. It names no
+    // snapshot date, so the lock records none.
+    assert!(
+        lock_text.contains(&format!(
+            "url = \"file://{}/src/contrib/tinyone_1.0.0.tar.gz\"\n",
+            fixture_path("fixture-repo/2026-06-30").display()
+        )),
+        "{lock_text}"
+    );
+    assert!(!lock_text.contains("snapshot = "), "{lock_text}");
+    assert!(
+        lock_text.contains("generated = \"1970-01-01T00:00:00Z\"\n"),
+        "{lock_text}"
+    );
     assert!(!lock_text.contains(".files]"));
     assert!(!lock_text.contains("artifact-digest"));
     assert_eq!(lock_text.matches("tree-digest = \"sha256:").count(), 1);
@@ -110,6 +126,192 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
         .stdout(predicate::str::contains("\"schema\": 1"))
         .stdout(predicate::str::contains("\"path\": \".\""))
         .stdout(predicate::str::contains("\"mismatch\": \"modified\""));
+}
+
+#[test]
+fn repo_url_is_used_as_written_whatever_its_path_looks_like() {
+    // Regression test for #78: a repository is not required to end in, or
+    // contain, a `YYYY-MM-DD` snapshot date.
+    for path in [
+        "cran/2026-06-30+Y3JhbiwyOjQ1MjYyMTU7",
+        "internal/latest",
+        "mirror",
+    ] {
+        let project = tempdir().unwrap();
+        let cache = project.path().join("cache");
+        let empty_path = project.path().join("empty-path");
+        fs::create_dir(&empty_path).unwrap();
+        let repository = project.path().join("repositories").join(path);
+        copy_tree(&fixture_path("fixture-repo/2026-06-30"), &repository);
+        write_repository_config(project.path(), &repository);
+
+        okr(project.path(), &cache, &empty_path)
+            .arg("sync")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("synchronized 1 source entry"));
+        let lock_text = fs::read_to_string(project.path().join("okr.lock")).unwrap();
+        assert!(
+            lock_text.contains(&format!(
+                "url = \"file://{}/src/contrib/tinyone_1.0.0.tar.gz\"\n",
+                repository.display()
+            )),
+            "{lock_text}"
+        );
+        assert!(project.path().join("deps-src/tinyone/R/hello.R").is_file());
+
+        okr(project.path(), &cache, &empty_path)
+            .arg("verify")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("verified sha256:"));
+        okr(project.path(), &cache, &empty_path)
+            .arg("status")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(format!(
+                "repos=\"file://{}\"",
+                repository.display()
+            )));
+    }
+}
+
+#[test]
+fn snapshot_selects_the_dated_public_snapshot_and_is_recorded_in_the_lock() {
+    let project = tempdir().unwrap();
+    let cache = project.path().join("cache");
+    let empty_path = project.path().join("empty-path");
+    fs::create_dir(&empty_path).unwrap();
+    fs::write(
+        project.path().join("okr.toml"),
+        "[project]\nsnapshot = \"2026-06-30\"\n\n[packages]\ntinyone = \"*\"\n",
+    )
+    .unwrap();
+    // The snapshot lives on the public Package Manager, so the cache is
+    // seeded with what an earlier online sync would have left there.
+    let snapshot = "https://packagemanager.posit.co/cran/2026-06-30";
+    let seeded = okr::fetch::Cache::new(&cache);
+    for file in ["PACKAGES.gz", "tinyone_1.0.0.tar.gz"] {
+        seeded
+            .put_file(
+                &format!("url:{snapshot}/src/contrib/{file}"),
+                &fixture_path("fixture-repo/2026-06-30/src/contrib").join(file),
+                None,
+            )
+            .unwrap();
+    }
+
+    okr(project.path(), &cache, &empty_path)
+        .args(["sync", "--offline"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("synchronized 1 source entry"));
+    let lock_text = fs::read_to_string(project.path().join("okr.lock")).unwrap();
+    assert!(
+        lock_text.contains("generated = \"2026-06-30T00:00:00Z\"\nsnapshot = \"2026-06-30\"\n"),
+        "{lock_text}"
+    );
+    assert!(
+        lock_text.contains(&format!(
+            "url = \"{snapshot}/src/contrib/tinyone_1.0.0.tar.gz\"\n"
+        )),
+        "{lock_text}"
+    );
+
+    okr(project.path(), &cache, &empty_path)
+        .arg("status")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "install with:  Rscript -e 'pak::pkg_install(c(\"tinyone\"), repos=\"{snapshot}\")'"
+        )));
+}
+
+#[test]
+fn snapshot_and_repo_url_together_are_rejected_with_the_url_to_write_instead() {
+    let project = tempdir().unwrap();
+    let cache = project.path().join("cache");
+    let empty_path = project.path().join("empty-path");
+    fs::create_dir(&empty_path).unwrap();
+    fs::write(
+        project.path().join("okr.toml"),
+        "[project]\nsnapshot = \"2026-06-30\"\nrepo-url = \"https://ppm.example.test/cran\"\n\n[packages]\ntinyone = \"*\"\n",
+    )
+    .unwrap();
+
+    for command in ["sync", "status", "verify"] {
+        okr(project.path(), &cache, &empty_path)
+            .arg(command)
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains(
+                "project.snapshot and project.repo-url cannot both be set",
+            ))
+            .stderr(predicate::str::contains(
+                "`repo-url = \"https://ppm.example.test/cran/2026-06-30\"`",
+            ));
+    }
+    assert!(!project.path().join("okr.lock").exists());
+}
+
+#[test]
+fn a_moving_repo_url_is_followed_and_a_version_that_moved_is_reported() {
+    let project = tempdir().unwrap();
+    let cache = project.path().join("cache");
+    let empty_path = project.path().join("empty-path");
+    fs::create_dir(&empty_path).unwrap();
+    let repository = project.path().join("repository");
+    publish_package(&repository, "tinyone", "1.0.0");
+    write_repository_config(project.path(), &repository);
+
+    okr(project.path(), &cache, &empty_path)
+        .arg("sync")
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    let first_lock = fs::read_to_string(project.path().join("okr.lock")).unwrap();
+    assert!(first_lock.contains("version = \"1.0.0\"\n"), "{first_lock}");
+
+    // The repository publishes a new version under the same URL. A sync that
+    // has to rebuild the tree reads the index again instead of trusting the
+    // copy in the cache, and says that the locked version moved.
+    publish_package(&repository, "tinyone", "1.1.0");
+    fs::remove_dir_all(project.path().join("deps-src")).unwrap();
+    okr(project.path(), &cache, &empty_path)
+        .arg("sync")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(format!(
+            "warning: tinyone was locked at version 1.0.0, but the repository at file://{} now lists 1.1.0; that version will be locked",
+            repository.display()
+        )));
+    let moved_lock = fs::read_to_string(project.path().join("okr.lock")).unwrap();
+    assert!(moved_lock.contains("version = \"1.1.0\"\n"), "{moved_lock}");
+    assert!(
+        moved_lock.contains(&format!(
+            "url = \"file://{}/src/contrib/tinyone_1.1.0.tar.gz\"\n",
+            repository.display()
+        )),
+        "{moved_lock}"
+    );
+
+    // Offline, the lock and the cache reproduce the tree without the
+    // repository.
+    fs::remove_dir_all(&repository).unwrap();
+    fs::remove_dir_all(project.path().join("deps-src")).unwrap();
+    okr(project.path(), &cache, &empty_path)
+        .args(["sync", "--offline"])
+        .assert()
+        .success()
+        .stderr(predicate::str::is_empty());
+    assert_eq!(
+        fs::read_to_string(project.path().join("okr.lock")).unwrap(),
+        moved_lock
+    );
+    okr(project.path(), &cache, &empty_path)
+        .arg("verify")
+        .assert()
+        .success();
 }
 
 #[test]
@@ -208,7 +410,10 @@ fn coherence_warns_by_default_and_is_fatal_only_when_strict() {
         .assert()
         .success()
         .stderr(predicate::str::contains("installed 9.9.9, vendored 1.0.0"))
-        .stderr(predicate::str::contains("install with:  Rscript -e"));
+        .stderr(predicate::str::contains(format!(
+            "install with:  Rscript -e 'pak::pkg_install(c(\"tinyone\"), repos=\"file://{}\")'",
+            fixture_path("fixture-repo/2026-06-30").display()
+        )));
 
     okr(project.path(), &cache, &tools)
         .args(["sync", "--strict"])
@@ -452,15 +657,48 @@ fn okr(project: &Path, cache: &Path, path: &Path) -> assert_cmd::Command {
 }
 
 fn write_cran_config(project: &Path) {
-    let repository = fixture_path("fixture-repo");
+    write_repository_config(project, &fixture_path("fixture-repo/2026-06-30"));
+}
+
+/// Declare `tinyone` from the CRAN-like repository rooted at `repository`.
+fn write_repository_config(project: &Path, repository: &Path) {
     fs::write(
         project.join("okr.toml"),
         format!(
-            "[project]\nsnapshot = \"2026-06-30\"\nrepo-url = \"file://{}\"\n\n[vendor]\ninclude-tests = false\n\n[packages]\ntinyone = \"*\"\n",
+            "[project]\nrepo-url = \"file://{}\"\n\n[vendor]\ninclude-tests = false\n\n[packages]\ntinyone = \"*\"\n",
             repository.display()
         ),
     )
     .unwrap();
+}
+
+/// Publish a minimal source package to the repository rooted at
+/// `repository` and list it as the only package in the index.
+fn publish_package(repository: &Path, name: &str, version: &str) {
+    let contrib = repository.join("src/contrib");
+    fs::create_dir_all(&contrib).unwrap();
+    let description =
+        format!("Package: {name}\nVersion: {version}\nTitle: Fixture\nLicense: MIT\n");
+    let mut header = tar::Header::new_gnu();
+    header.set_size(description.len() as u64);
+    header.set_mode(0o644);
+    header.set_cksum();
+    let mut archive = tar::Builder::new(GzEncoder::new(Vec::new(), Compression::default()));
+    archive
+        .append_data(
+            &mut header,
+            format!("{name}/DESCRIPTION"),
+            description.as_bytes(),
+        )
+        .unwrap();
+    let tarball = archive.into_inner().unwrap().finish().unwrap();
+    fs::write(contrib.join(format!("{name}_{version}.tar.gz")), tarball).unwrap();
+
+    let mut index = GzEncoder::new(Vec::new(), Compression::default());
+    index
+        .write_all(format!("Package: {name}\nVersion: {version}\n").as_bytes())
+        .unwrap();
+    fs::write(contrib.join("PACKAGES.gz"), index.finish().unwrap()).unwrap();
 }
 
 fn fixture_path(relative: &str) -> PathBuf {

@@ -10,7 +10,7 @@ use serde::Serialize;
 use tempfile::NamedTempFile;
 use toml_edit::{DocumentMut, Item, Table, Value, value};
 
-use crate::config::{Config, DEFAULT_REPO_URL};
+use crate::config::{Config, Repository, SNAPSHOT_BASE_URL};
 use crate::fetch::{Cache, Fetcher};
 use crate::hosttools::HostTools;
 use crate::lock::{LOCK_VERSION, Lockfile, VerificationReport, config_digest, verify_vendor};
@@ -80,7 +80,7 @@ pub struct InitArgs {
 
 #[derive(Debug, Args)]
 #[command(
-    after_long_help = "Examples:\n  okr add rpact\n  okr add pharmaverse/admiral@v1.5.0\n  okr add github::tidyverse/ggplot2\n  okr add r-lib/testthat@\\*release\n  okr add gitlab::jimhester/covr@abc123\n  okr add bitbucket::sulab/mygene.r@default\n  okr add git::git@ghe.example:stats/simlib.git@v2.1\n  okr add --reference git::https://codeberg.org/org/protocols.git@main\n\nDirect url:: archives (.tar.gz, .tgz, or .zip) require table form in okr.toml so a sha256 can be declared. Bare names such as `rpact` add a CRAN `*` entry against project.snapshot."
+    after_long_help = "Examples:\n  okr add rpact\n  okr add pharmaverse/admiral@v1.5.0\n  okr add github::tidyverse/ggplot2\n  okr add r-lib/testthat@\\*release\n  okr add gitlab::jimhester/covr@abc123\n  okr add bitbucket::sulab/mygene.r@default\n  okr add git::git@ghe.example:stats/simlib.git@v2.1\n  okr add --reference git::https://codeberg.org/org/protocols.git@main\n\nDirect url:: archives (.tar.gz, .tgz, or .zip) require table form in okr.toml so a sha256 can be declared. Bare names such as `rpact` add a CRAN `*` entry, resolved from the repository selected by project.snapshot or project.repo-url."
 )]
 pub struct AddArgs {
     /// Source specifications to add.
@@ -215,10 +215,9 @@ fn discover_default_snapshot() -> Result<String> {
     let fetcher = Fetcher::new(cache, false)?;
     let today = SnapshotDate::today_utc()?;
     let snapshot = find_available_snapshot(today, |candidate| {
-        let url = format!("{DEFAULT_REPO_URL}/{candidate}/src/contrib/PACKAGES.gz");
         fetcher
             .fetch_url_if_exists(
-                &url,
+                &Repository::snapshot(candidate).index_url(),
                 None,
                 &format!("CRAN snapshot {candidate} PACKAGES index"),
             )
@@ -227,7 +226,7 @@ fn discover_default_snapshot() -> Result<String> {
     snapshot.ok_or_else(|| {
         let oldest = today.previous(SNAPSHOT_LOOKBACK_DAYS - 1);
         Error::Fetch(format!(
-            "could not find an available dated CRAN snapshot at {DEFAULT_REPO_URL} between {oldest} and {today}"
+            "could not find an available dated CRAN snapshot at {SNAPSHOT_BASE_URL} between {oldest} and {today}"
         ))
     })
 }
@@ -425,7 +424,7 @@ fn run_status(config_path: &Path, json: bool, quiet: bool, _verbose: bool) -> Re
     let coherence = lock.as_ref().map(|lock| check_coherence(lock, &inspection));
     let install = lock
         .as_ref()
-        .and_then(|lock| (!lock.packages.is_empty()).then(|| install_command(&config, lock)));
+        .and_then(|lock| (!lock.packages.is_empty()).then(|| install_command(lock)));
     let r_status = status_r(&inspection, config.project.r_version.as_deref());
 
     if json {
@@ -887,7 +886,7 @@ fn emit_coherence(config: &Config, lock: &Lockfile, report: &CoherenceReport, qu
                     mismatch.vendored_version
                 );
             }
-            eprintln!("install with:  {}", install_command(config, lock));
+            eprintln!("install with:  {}", install_command(lock));
         }
     }
     if let (Some(expected), Some(actual)) = (&config.project.r_version, &report.r_version)
@@ -900,8 +899,10 @@ fn emit_coherence(config: &Config, lock: &Lockfile, report: &CoherenceReport, qu
     }
 }
 
+/// The command that installs the locked packages, reading CRAN packages from
+/// the repository their sources were locked from.
 #[must_use]
-pub fn install_command(config: &Config, lock: &Lockfile) -> String {
+pub fn install_command(lock: &Lockfile) -> String {
     let targets = lock
         .packages
         .iter()
@@ -917,17 +918,26 @@ pub fn install_command(config: &Config, lock: &Lockfile) -> String {
         .map(|target| format!("\"{}\"", escape_r_string(&target)))
         .collect::<Vec<_>>()
         .join(",");
-    let repository = lock.snapshot.as_ref().map(|snapshot| {
-        format!(
-            ", repos=\"{}/{snapshot}\"",
-            escape_r_string(config.repository_url())
-        )
-    });
+    let repository = locked_repository(lock)
+        .map(|repository| format!(", repos=\"{}\"", escape_r_string(repository)));
     let expression = format!(
         "pak::pkg_install(c({targets}){})",
         repository.as_deref().unwrap_or("")
     );
     format!("Rscript -e '{}'", expression.replace('\'', "'\"'\"'"))
+}
+
+/// The repository that the locked CRAN packages came from: the root of the
+/// `src/contrib` URL recorded for them. Reading it from the lock keeps the
+/// command on the vendored versions even when `okr.toml` has since changed.
+fn locked_repository(lock: &Lockfile) -> Option<&str> {
+    lock.packages
+        .iter()
+        .filter(|package| package.source == "cran")
+        .find_map(|package| {
+            let url = package.url.as_deref()?;
+            url.rfind("/src/contrib/").map(|root| &url[..root])
+        })
 }
 
 fn escape_r_string(value: &str) -> String {
@@ -985,7 +995,9 @@ mod tests {
 
     use super::{
         Cli, SNAPSHOT_LOOKBACK_DAYS, SnapshotDate, default_config, find_available_snapshot,
+        install_command,
     };
+    use crate::lock::{FetchMethod, LOCK_VERSION, LockedPackage, Lockfile};
     use crate::{Error, config::Config};
 
     #[test]
@@ -1049,6 +1061,63 @@ mod tests {
             find_available_snapshot(today, |_| Err(Error::Fetch("network unavailable".into())))
                 .unwrap_err();
         assert!(error.to_string().contains("network unavailable"));
+    }
+
+    #[test]
+    fn install_command_reads_the_repository_from_the_locked_package_urls() {
+        let package =
+            |name: &str, source: &str, url: Option<&str>, commit: Option<&str>| LockedPackage {
+                name: name.into(),
+                version: "1.0.0".into(),
+                source: source.into(),
+                url: url.map(str::to_owned),
+                reference: None,
+                commit: commit.map(str::to_owned),
+                fetch_method: FetchMethod::Tarball,
+                tree_digest: format!("sha256:{}", "a".repeat(64)),
+                license: None,
+            };
+        let lock = |packages: Vec<LockedPackage>| Lockfile {
+            version: LOCK_VERSION,
+            okr_version: env!("CARGO_PKG_VERSION").into(),
+            generated: "1970-01-01T00:00:00Z".into(),
+            snapshot: None,
+            config_digest: format!("sha256:{}", "b".repeat(64)),
+            environment_digest: format!("sha256:{}", "c".repeat(64)),
+            packages,
+            references: Vec::new(),
+        };
+        let remote = package("admiral", "github::pharmaverse/admiral", None, Some("9f2c"));
+
+        // An archived version sits below `src/contrib/Archive`, and the
+        // repository is still the part of the URL before `src/contrib`.
+        let archived = package(
+            "cli",
+            "cran",
+            Some("https://ppm.example.test/cran/latest/src/contrib/Archive/cli/cli_1.0.0.tar.gz"),
+            None,
+        );
+        assert_eq!(
+            install_command(&lock(vec![remote.clone(), archived])),
+            "Rscript -e 'pak::pkg_install(c(\"github::pharmaverse/admiral@9f2c\",\"cli\"), repos=\"https://ppm.example.test/cran/latest\")'"
+        );
+
+        let dated = package(
+            "rpact",
+            "cran",
+            Some("https://packagemanager.posit.co/cran/2026-06-30/src/contrib/rpact_1.0.0.tar.gz"),
+            None,
+        );
+        assert_eq!(
+            install_command(&lock(vec![dated])),
+            "Rscript -e 'pak::pkg_install(c(\"rpact\"), repos=\"https://packagemanager.posit.co/cran/2026-06-30\")'"
+        );
+
+        // Remote packages alone need no repository.
+        assert_eq!(
+            install_command(&lock(vec![remote])),
+            "Rscript -e 'pak::pkg_install(c(\"github::pharmaverse/admiral@9f2c\"))'"
+        );
     }
 
     #[test]

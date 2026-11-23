@@ -232,11 +232,11 @@ fn status_reports_tools_freshness_integrity_cache_and_machine_json() {
     let cache = project.path().join("cache");
     let empty_path = project.path().join("empty-path");
     fs::create_dir(&empty_path).unwrap();
-    let repository = fixture_path("fixture-repo");
+    let repository = fixture_path("fixture-repo/2026-06-30");
     fs::write(
         project.path().join("okr.toml"),
         format!(
-            "[project]\nsnapshot = \"2026-06-30\"\nrepo-url = \"file://{}\"\n[packages]\ntinyone = \"*\"\n",
+            "[project]\nrepo-url = \"file://{}\"\n[packages]\ntinyone = \"*\"\n",
             repository.display()
         ),
     )
@@ -257,7 +257,10 @@ fn status_reports_tools_freshness_integrity_cache_and_machine_json() {
         .stdout(predicate::str::contains("lock: fresh"))
         .stdout(predicate::str::contains("vendor: clean"))
         .stdout(predicate::str::contains("cache:"))
-        .stdout(predicate::str::contains("install with:  Rscript -e"));
+        .stdout(predicate::str::contains(format!(
+            "install with:  Rscript -e 'pak::pkg_install(c(\"tinyone\"), repos=\"file://{}\")'",
+            repository.display()
+        )));
 
     let output = okr(project.path(), &cache, &empty_path)
         .args(["status", "--json"])
@@ -307,8 +310,8 @@ fn seed_current_snapshot(cache: &Path) -> String {
     assert!(output.status.success());
     let snapshot = String::from_utf8(output.stdout).unwrap().trim().to_owned();
     let key = format!(
-        "url:{}/{snapshot}/src/contrib/PACKAGES.gz",
-        okr::config::DEFAULT_REPO_URL
+        "url:{}",
+        okr::config::Repository::snapshot(&snapshot).index_url()
     );
     okr::fetch::Cache::new(cache)
         .put_bytes(&key, b"cached test snapshot", None)

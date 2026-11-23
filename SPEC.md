@@ -39,7 +39,7 @@ dedicated tools:
 
 When R is available, `okr` may inspect the installed library as a read-only
 diagnostic. It also prints a companion installation command that uses the same
-snapshot. It never runs that command.
+repository. It never runs that command.
 
 ## 3. Goals
 
@@ -63,7 +63,7 @@ snapshot. It never runs that command.
 
 - **Keep installation external.** `okr` does not install R or R packages and
   does not modify an R library.
-- **Resolve by lookup.** CRAN resolution reads the selected snapshot's
+- **Resolve by lookup.** CRAN resolution reads the configured repository's
   `PACKAGES` index; it does not solve dependency constraints.
 - **Supply context, not evaluations.** Task definitions, agent loops, and
   grading belong to the evaluation harness. `okr` supplies machine-readable
@@ -94,9 +94,14 @@ snapshot. It never runs that command.
   for example, a standards repository, protocol templates, or a non-R codebase.
   It has no package-version semantics and does not participate in R library
   diagnostics. Its commit is still pinned.
+- **Repository** is the CRAN-like package repository that CRAN declarations
+  are resolved against: a root URL that serves `src/contrib/PACKAGES.gz` and
+  the source packages it lists. A configuration needs one when, and only
+  when, it contains a CRAN package. It is selected by `project.snapshot` or
+  given in full by `project.repo-url`.
 - **Snapshot** is a dated PPM repository such as
-  `https://packagemanager.posit.co/cran/2026-06-30`. It is required when, and
-  only when, the configuration contains a CRAN package.
+  `https://packagemanager.posit.co/cran/2026-06-30`. `project.snapshot` names
+  one by its date, and its contents never change.
 - **Cache** is the content-addressed artifact cache under `$OKR_CACHE_DIR`, or
   `~/.cache/okr` by default. Artifacts are keyed by SHA-256.
 - **Manifest** means `deps-src/_manifest.json` and `deps-src/_manifest.md`.
@@ -296,17 +301,43 @@ it does not solve dependency constraints.
 
 ### Resolve CRAN packages
 
-Fetch `{repo}/{snapshot}/src/contrib/PACKAGES.gz` at most once per sync and
-cache it. Parse its DCF stanzas and find each declared package. `"*"` selects
-the version in the snapshot. An explicit version must either appear in the
-snapshot or be available from the CRAN archive.
+CRAN declarations are resolved against one repository (§13):
+
+- `project.snapshot = "YYYY-MM-DD"` selects the dated PPM snapshot
+  `https://packagemanager.posit.co/cran/YYYY-MM-DD`.
+- `project.repo-url` gives the complete root URL of any other CRAN-like
+  repository. It is used exactly as written: `okr` appends only `src/contrib`
+  paths to it and derives nothing from its shape. The repository therefore
+  does not have to be dated, to follow a naming convention, or to be served
+  by a Package Manager.
+
+Fetch `{repository}/src/contrib/PACKAGES.gz` at most once per sync. Parse its
+DCF stanzas and find each declared package. `"*"` selects the version in the
+index. An explicit version must either appear in the index or be available
+from the repository's archive.
 
 If the index contains the same package at multiple versions, select the
-greatest version using R's numeric package-version ordering. The source URL is:
+greatest version using R's numeric package-version ordering. The source URL
+is the first of these, or the second for an explicit version that the index
+does not list:
 
 ```text
-{repo}/{snapshot}/src/contrib/{name}_{version}.tar.gz
+{repository}/src/contrib/{name}_{version}.tar.gz
+{repository}/src/contrib/Archive/{name}/{name}_{version}.tar.gz
 ```
+
+A snapshot never changes, so its index is cached and reused. A `repo-url` may
+name a fixed snapshot or a moving repository, such as a CRAN mirror or a
+`latest` alias, and `okr` cannot tell which. It reads that index again in
+every online resolution and keeps the most recent copy in the cache for
+offline use.
+
+A moving repository follows the same contract as a branch ref. The lock
+records the exact version and URL that were resolved, and a later online
+resolution of `"*"` may select a newer version. When that version differs
+from the one a fresh lock recorded, `sync` warns and locks the new version.
+A fixed repository, or an explicit version, keeps later resolutions on the
+same version.
 
 ### Resolve Git refs
 
@@ -450,7 +481,7 @@ These checks answer different questions and have different defaults.
 - **Installed library coherence is diagnostic by default.** During `sync` and
   `status`, report any declared package that is absent from the installed
   library or has a different version. Name both versions when available and
-  print the companion installation command for the locked snapshot.
+  print the companion installation command for the locked repository.
 - **Strict mode attests the installed library too.** `--strict` turns drift into
   exit code 4 for `sync` and `verify`. `strict = true` under `[project]` applies
   the same rule to `sync`, `status`, and `verify`. Evaluation configurations can
@@ -509,7 +540,10 @@ tree-digest = "sha256:..."
 `verify` explain that `sync` is needed. Version 1 additionally recorded an
 `artifact-digest` per entry.
 
-`snapshot` is present only when the lock contains a CRAN package.
+`snapshot` is present only when the lock contains a CRAN package that was
+resolved from `project.snapshot`. A package resolved from `project.repo-url`
+has no snapshot date to record; its `url` starts with the repository URL and
+identifies the repository by itself.
 `generated` is deterministic: snapshot midnight when a snapshot is present,
 otherwise the Unix epoch. It is never the wall-clock sync time.
 
@@ -555,11 +589,12 @@ aggregate hash. Verification therefore identifies the entry whose tree
 changed, not the individual file.
 
 The lock records no digest of the acquisition artifact. Every source already
-has an upstream identity: a CRAN package by snapshot, version, and URL; a Git
-source by its full commit; and a direct URL by the `sha256` pin declared in
-`okr.toml`. What the artifact digest would add is a pin on archive bytes, and
-forges do not promise that the archive for one commit is byte-stable, so such
-a pin can fail even when every vendored file is identical. The tree digest
+has an upstream identity: a CRAN package by its version and its URL in the
+repository; a Git source by its full commit; and a direct URL by the `sha256`
+pin declared in `okr.toml`. What the artifact digest would add is a pin on
+archive bytes, and forges do not promise that the archive for one commit is
+byte-stable, so such a pin can fail even when every vendored file is
+identical. The tree digest
 already catches every change to the bytes agents read. The cache keys each
 artifact by its fetch method and source, so offline replay does not need the
 digest either. This mirrors Go's `go.sum`, which hashes a module's file tree
@@ -608,9 +643,9 @@ an R package.
 ```toml
 [project]
 r-version = "4.5.1"                  # optional expected R; advisory only
-snapshot = "2026-06-30"              # required when CRAN packages are declared
+snapshot = "2026-06-30"              # dated PPM snapshot for CRAN packages
 strict = false                       # make installed library drift fatal (§10)
-# repo-url = "https://packagemanager.posit.co/cran"
+# repo-url = "https://ppm.example.com/cran/2026-06-30"   # instead of snapshot
 
 [vendor]
 path = "deps-src"
@@ -639,7 +674,16 @@ bibtex-guide = { url = "https://mirrors.mit.edu/CTAN/info/bibtex/tamethebeast.zi
 
 Apply these rules:
 
-- `snapshot` is required when, and only when, `[packages]` contains a CRAN declaration.
+- A CRAN declaration in `[packages]` needs a repository, which is given by
+  exactly one of `snapshot` and `repo-url`. Setting neither is a configuration
+  error, and so is setting both; the error for both names the `repo-url` that
+  reads the same repository.
+- `snapshot` is the `YYYY-MM-DD` date of a PPM CRAN snapshot. Any other
+  repository identifier belongs in `repo-url`.
+- `repo-url` is the complete root URL of a CRAN-like repository, which is the
+  value R's `repos` option takes. It must be an `https://`, `http://`, or
+  `file://` URL without whitespace, a query, a fragment, or a trailing
+  `src/contrib`. Beyond these checks it is used exactly as written (§8).
 - `r-version`, when present, is the exact `major.minor.patch` version expected
   from the project's `Rscript`. `sync` and `status` compare it with
   `R.version$major` plus `R.version$minor` and warn on a mismatch.
@@ -670,7 +714,7 @@ image, then verify both after network access has been disabled:
 
 ```text
 okr sync
-# Install packages with the user's chosen tool and the snapshot shown by `okr status`.
+# Install packages with the user's chosen tool and the repository shown by `okr status`.
 # Copy the prepared project, R library, and any required cache into the image.
 
 okr verify --strict --json || exit 1

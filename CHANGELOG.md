@@ -2,6 +2,61 @@
 
 ## okr (development version)
 
+### Breaking changes
+
+- `project.repo-url` is now the complete URL of the repository that CRAN
+  packages are resolved from, and it is used exactly as written (#81).
+  It used to be a base URL to which `okr` appended `project.snapshot`, so
+  a repository could only be used if its URL ended in a `YYYY-MM-DD` date.
+  Any CRAN-like repository now works, whatever its URL looks like: a Package
+  Manager snapshot with another identifier, a Package Manager URL for a Linux
+  distribution, a `latest` alias, a CRAN mirror, or a local `file://`
+  repository. For example:
+
+  ```toml
+  [project]
+  repo-url = "https://ppm.example.com/cran/2026-06-30+Y3JhbiwyOjQ1MjYyMTU7"
+  ```
+
+  `snapshot` and `repo-url` are now mutually exclusive. A configuration that
+  sets both fails with exit code 2, and the error names the `repo-url` to
+  write instead: `snapshot = "2026-06-30"` with
+  `repo-url = "https://ppm.example.com/cran"` becomes
+  `repo-url = "https://ppm.example.com/cran/2026-06-30"` alone. The next
+  `okr sync` rewrites the lock without `snapshot` and with `generated` at the
+  Unix epoch. The locked URLs, tree digests, and environment digest stay the
+  same.
+
+  Configurations that set only `snapshot` are not affected. `snapshot` still
+  selects the dated Posit (Public) Package Manager CRAN snapshot, and the lock
+  format is unchanged.
+- Validate `repo-url` when the configuration is read (#81). It must be an
+  `https://`, `http://`, or `file://` URL of the repository root, without
+  whitespace, a query, a fragment, or a trailing `src/contrib`.
+
+### Improvements
+
+- Read the package index of a `repo-url` repository again whenever an online
+  `okr sync` resolves sources, because `okr` cannot tell whether such a
+  repository is a fixed snapshot (#81). A repository that moves, such as a
+  CRAN mirror, no longer resolves against a stale cached index. The cached
+  copy is still used with `--offline`, and the index of a dated `snapshot` is
+  still cached.
+- Warn when a `"*"` package resolves to a different version than an
+  up-to-date lock recorded, which happens when the repository has moved since
+  the last sync (#81). The new version is locked, as for a branch ref.
+- Read the repository in the companion installation command from the lock, so
+  that the command keeps installing the vendored versions after `okr.toml`
+  has changed (#81).
+- Point an invalid `project.snapshot` value, such as `latest` or a snapshot
+  identifier that is not a date, to `project.repo-url` (#81).
+
+### Bug fixes
+
+- Report a missing file behind a `file://` URL as a fetch error with exit
+  code 3 that names the file, instead of a bare I/O error with exit
+  code 1 (#81).
+
 ### Dependencies
 
 - Adopt a 7-day dependency cooldown for development with Cargo 1.100+ (#79).
