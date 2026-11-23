@@ -1,0 +1,3 @@
+# Dependency cooldown (Cargo 1.100+): skip crate versions published in the last 7 days.
+[registry]
+global-min-publish-age = "7 days"
