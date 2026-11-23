@@ -10,10 +10,23 @@ record both what was selected and how its source tree was produced.
 
 ## CRAN lookup
 
-For CRAN entries, `okr` reads the configured dated repository's
+For CRAN entries, `okr` reads the configured repository's
 `src/contrib/PACKAGES.gz` once per sync. A wildcard selects the indexed version;
-an explicit version is validated against the index and falls back to its CRAN
-archive URL when superseded.
+an explicit version is validated against the index and falls back to its
+archive URL in the same repository when superseded.
+
+The repository is either the dated public snapshot named by `project.snapshot`
+or the complete URL given as `project.repo-url`. A `repo-url` is used exactly
+as written: `okr` appends `src/contrib` paths and does not look for a date or
+any other convention in the URL. See
+[package repository](../guide/configuration.md#package-repository) for how to
+choose between the two.
+
+A snapshot is immutable, so its cached index is reused. Nothing guarantees
+that for a `repo-url`, so its index is read again in every online resolution
+and the cached copy is used only offline. If a wildcard then resolves to a
+different version than an up-to-date lock recorded, `sync` warns and locks the
+new version, as it does when a branch ref has moved.
 
 When an index contains repeated records for one package, same-version records
 are accepted. If repeated records disagree, `okr` deterministically selects the

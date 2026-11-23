@@ -19,7 +19,7 @@ fail immediately instead of silently changing reproducibility.
 r-version = "4.5.1" # optional expected project runtime
 snapshot = "2026-06-30"
 strict = false
-# repo-url = "https://packagemanager.posit.co/cran"
+# repo-url = "https://ppm.example.com/cran/2026-06-30" # instead of snapshot
 
 [vendor]
 path = "deps-src"
@@ -49,17 +49,9 @@ tamethebeast = { url = "https://mirrors.mit.edu/CTAN/info/bibtex/tamethebeast.zi
 | Key | Default | Meaning |
 |---|---|---|
 | `r-version` | unset | Exact R runtime expected by the project harness; advisory only. |
-| `snapshot` | unset | Exact `YYYY-MM-DD` CRAN snapshot. Required when any CRAN package is declared. |
+| `snapshot` | unset | `YYYY-MM-DD` date of the Posit (Public) Package Manager CRAN snapshot that CRAN packages are resolved from. |
 | `strict` | `false` | Make installed-library version mismatches fail `sync`, `status`, and `verify` with exit code 4. |
-| `repo-url` | Posit (Public) Package Manager CRAN | Base URL for a compatible dated CRAN repository or mirror. |
-
-`okr init` fills `snapshot` with the latest available exact date found in a
-bounded 14-day search. It never writes a moving `latest` alias. A remote-only
-configuration may omit the snapshot. The date determines which versions `"*"`
-CRAN declarations resolve to. To target a specific snapshot, replace the
-generated value with the desired `YYYY-MM-DD` date and run `okr sync` again;
-`okr` will refresh the lockfile and vendored sources for the edited
-configuration.
+| `repo-url` | unset | Complete URL of any other CRAN-like repository to resolve CRAN packages from, used exactly as written. Cannot be combined with `snapshot`. |
 
 `r-version` uses R's exact `major.minor.patch` form, such as `4.5.1`. When it
 is set, `okr sync` and `okr status` compare it with the version reported by the
@@ -74,6 +66,81 @@ initialization still succeeds and omits the optional field. Edit or remove the
 generated value when the intended harness differs from the environment used
 for initialization. `okr` never substitutes the latest stable R release from
 CRAN because that does not describe the project's actual runtime.
+
+## Package repository
+
+CRAN packages are resolved from one repository. A configuration that declares
+a CRAN package selects it with exactly one of `snapshot` and `repo-url`; a
+remote-only configuration may omit both.
+
+### A dated public snapshot
+
+`snapshot` is the short form for the public default. `snapshot = "2026-06-30"`
+reads the repository
+`https://packagemanager.posit.co/cran/2026-06-30`.
+
+`okr init` fills `snapshot` with the latest available exact date found in a
+bounded 14-day search. It never writes a moving `latest` alias. The date
+determines which versions `"*"` CRAN declarations resolve to. To target a
+specific snapshot, replace the generated value with the desired `YYYY-MM-DD`
+date and run `okr sync` again; `okr` will refresh the lockfile and vendored
+sources for the edited configuration.
+
+### Any other repository
+
+Use `repo-url` for a repository that is not a dated public snapshot: a
+self-hosted Package Manager, an internal CRAN-like repository, a CRAN mirror,
+or a repository on the local filesystem. Set it to the complete repository
+URL, which is the value R's `repos` option takes, and remove `snapshot`:
+
+```toml
+[project]
+repo-url = "https://ppm.example.com/cran/2026-06-30+Y3JhbiwyOjQ1MjYyMTU7"
+```
+
+`okr` uses the URL exactly as written. It reads
+`<repo-url>/src/contrib/PACKAGES.gz` and the package archives below
+`<repo-url>/src/contrib/`, and it derives nothing from the shape of the URL.
+The repository does not have to be dated, and its path does not have to
+follow any naming convention:
+
+| Repository | `repo-url` |
+|---|---|
+| Package Manager snapshot with any identifier | `https://ppm.example.com/cran/2026-06-30+Y3JhbiwyOjQ1MjYyMTU7` |
+| Package Manager URL for a Linux distribution | `https://packagemanager.posit.co/cran/__linux__/noble/2026-06-30` |
+| Moving alias | `https://ppm.example.com/internal/latest` |
+| CRAN mirror | `https://cloud.r-project.org` |
+| Local repository | `file:///srv/cran-mirror` |
+
+The URL must use `https://`, `http://`, or `file://`, and it must be the
+repository root rather than its `src/contrib` directory. It cannot contain
+whitespace, a query, or a fragment.
+
+`snapshot` and `repo-url` cannot be combined, because `okr` does not append
+the snapshot date to the URL. A configuration that sets both is rejected with
+the `repo-url` to write instead. For example, `snapshot = "2026-06-30"` with
+`repo-url = "https://ppm.example.com/cran"` becomes
+`repo-url = "https://ppm.example.com/cran/2026-06-30"`.
+
+### Fixed and moving repositories
+
+A `snapshot` never changes, so `okr` caches its package index and reuses it.
+
+`okr` cannot tell whether a `repo-url` names a fixed snapshot or a repository
+that moves, such as a CRAN mirror or a `latest` alias. It therefore reads the
+index again whenever an online sync resolves sources, and keeps the most
+recent copy in the cache for `--offline`. For a fixed repository this changes
+nothing.
+
+For a moving repository, `"*"` resolves to the version the index lists at
+that moment. The lock still records the exact version, URL, and tree digest,
+and `okr verify` attests them. A later sync that has to resolve again, for
+example after a configuration change or in a fresh checkout without the
+vendor tree, may select a newer version. When it replaces a version recorded
+in an up-to-date lock, `sync` prints a warning and locks the new version. To
+keep later syncs on the same versions, point `repo-url` at a fixed snapshot,
+declare explicit versions, or rebuild with `okr sync --offline` from the
+cache.
 
 ## Vendor settings
 

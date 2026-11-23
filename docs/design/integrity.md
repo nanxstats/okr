@@ -32,7 +32,7 @@ archive or normalized clone archive. It was dropped because it had no job the
 other fields do not already do.
 
 Every source has an upstream identity without it: a CRAN package is fixed by
-its snapshot, version, and URL; a Git source by its full commit; and a direct
+its version and its URL in the repository; a Git source by its full commit; and a direct
 `url` source by the `sha256` pin declared in `okr.toml`, which is still checked
 before the download is committed to the cache. The tree digest catches every
 change to the bytes agents read. An archive digest, by contrast, pins bytes
@@ -84,8 +84,8 @@ and so `verify` can detect a manually edited lock.
 Other deterministic lock properties include:
 
 - packages and references sorted by name within their kind;
-- `generated` set to snapshot midnight, or the Unix epoch for a remote-only
-  lock, rather than wall-clock time;
+- `generated` set to snapshot midnight, or the Unix epoch for a lock that
+  records no snapshot, rather than wall-clock time;
 - a normalized configuration digest for staleness detection; and
 - stable TOML serialization.
 

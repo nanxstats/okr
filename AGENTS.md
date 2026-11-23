@@ -15,8 +15,12 @@ Keep these invariants intact:
 
 - `okr` never installs R, installs packages, or writes to an R library. R
   inspection is read-only and optional.
-- CRAN resolution is a lookup in the dated snapshot's `PACKAGES.gz`; there is
-  no dependency or version-constraint solver.
+- CRAN resolution is a lookup in the configured repository's `PACKAGES.gz`;
+  there is no dependency or version-constraint solver.
+- `project.repo-url` is a complete repository URL and is used exactly as
+  written. Append only `src/contrib` paths to it, and never infer a snapshot,
+  a date, or immutability from its shape. Only `project.snapshot` names a
+  repository that is known to be fixed.
 - Runtime HTTP is synchronous. Do not add an async runtime.
 - Do not add libgit2, gix, or credential storage. Invoke optional `git` and
   `gh` binaries through `xshell` with explicit argument vectors and inherited
@@ -58,9 +62,9 @@ library modules.
 | `src/main.rs` | Binary entry point and `anyhow` context at the process boundary. | Keep it thin; delegate behavior to the library and preserve library exit-code mappings. |
 | `src/lib.rs` | Public modules, shared `Error`, and stable exit-code classes. | Config/spec = 2, fetch = 3, verification/coherence = 4, unexpected I/O = 1. |
 | `src/cli.rs` | Clap surface and orchestration for `init`, `add`, `sync`, `status`, and `verify`. | Keep `main.rs` thin; reject `--json` where unsupported; preserve sync's digest-based no-op path. |
-| `src/config.rs` | Strict serde models, defaults, validation, and declaration normalization for `okr.toml`. | Keep `deny_unknown_fields`, safe relative vendor paths, URL digests, and package/reference name collision checks. Never use serde to write `okr add` edits. |
+| `src/config.rs` | Strict serde models, defaults, validation, declaration normalization, and the `Repository` selected by `okr.toml`. | Keep `deny_unknown_fields`, safe relative vendor paths, URL digests, and package/reference name collision checks. `snapshot` and `repo-url` stay mutually exclusive. Never use serde to write `okr add` edits. |
 | `src/spec.rs` | Parser for the supported R `Remotes` grammar and CRAN/remote disambiguation. | Preserve instructive 0.2/rejected-source errors. Extend its table-driven and hostile-input tests with every grammar change. |
-| `src/resolve.rs` | Snapshot lookup, archive fallback, git-ref freezing, public-forge API fallback, and GitHub release tiering. | Lookup only, never solve constraints. Full 40-character SHAs skip ref resolution. Keep the `GithubReleaseApi` seam stubbable. |
+| `src/resolve.rs` | Repository index lookup, archive fallback, git-ref freezing, public-forge API fallback, and GitHub release tiering. | Lookup only, never solve constraints. Reuse a cached index only for a snapshot; read a `repo-url` index again when online, and warn when a locked `"*"` version moved. Full 40-character SHAs skip ref resolution. Keep the `GithubReleaseApi` seam stubbable. |
 | `src/resolve/dcf.rs` | Minimal DCF parser for `PACKAGES` and `DESCRIPTION`. | Support continuation lines and multiple stanzas without adding a parsing dependency. |
 | `src/fetch.rs` | Synchronous HTTP/file acquisition and the content-addressed cache under `OKR_CACHE_DIR`. | Verify declared SHA-256 pins before commit, use temp-file plus rename, reverify hits against their content address, index every artifact by its source key for digest-free replay, and fail clearly on offline misses. |
 | `src/hosttools.rs` | Optional `git`/`gh` discovery and all host-tool subprocess calls. | Use only `xshell` argument vectors; inherit user auth; capture tool output so nothing reaches the terminal, and attach a failing tool's standard error to the error; produce actionable missing-tool errors; clone with `core.autocrlf=false`. |
@@ -80,14 +84,14 @@ Deterministic output is a correctness requirement, not a cosmetic preference.
 - Tree inventory records are `path<TAB>file-sha256`, joined with LF and no
   trailing newline. Paths are UTF-8 and `/`-normalized.
 - The lock's `generated` value is snapshot midnight, or the Unix epoch for a
-  remote-only lock; do not replace it with wall-clock time.
+  lock that records no snapshot; do not replace it with wall-clock time.
 - Per-file hashes are an internal input to each aggregate tree digest; do not
   serialize the inventory in the lock or manifest. The aggregate tree digests
   are part of the environment digest.
 - The tree digest is the only per-entry digest. Do not reintroduce an
-  artifact digest: a source is identified by snapshot, version, and URL, by
-  its full commit, or by a declared `sha256` pin, and the cache is indexed by
-  fetch method and source for replay.
+  artifact digest: a source is identified by its version and repository URL,
+  by its full commit, or by a declared `sha256` pin, and the cache is indexed
+  by fetch method and source for replay.
 - Clone-produced trees are cached as normalized gzip tarballs with sorted
   paths, zero mtimes and ownership, and normalized modes.
 - `fetch-method` is provenance. Reproduction should replay the locked method

@@ -33,7 +33,7 @@ okr add pharmaverse/admiral@v1.5.0
 ```
 
 Bare names become `"*"` entries under `[packages]`, resolved from the configured
-snapshot. Remote specifications use the familiar R `Remotes` style. `add`
+snapshot or [repository](configuration.md#package-repository). Remote specifications use the familiar R `Remotes` style. `add`
 updates `okr.toml` without running a sync and preserves its comments and
 formatting.
 
@@ -84,7 +84,7 @@ okr verify
 
 `status` reports lock freshness, vendor integrity, host-tool availability,
 cache usage, and installed-library coherence when R is available. It also
-prints a companion package-install command against the locked snapshot, but
+prints a companion package-install command against the locked repository, but
 never runs it.
 
 `verify` hashes the complete vendored tree and generated manifests. Any drift

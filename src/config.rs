@@ -11,7 +11,9 @@ use serde::{Deserialize, Serialize};
 use crate::spec::{PackageSpec, RemoteLocation, RemoteSpec, parse_package};
 use crate::{Error, Result};
 
-pub const DEFAULT_REPO_URL: &str = "https://packagemanager.posit.co/cran";
+/// The Posit Public Package Manager CRAN repository whose dated snapshots
+/// `project.snapshot` selects.
+pub const SNAPSHOT_BASE_URL: &str = "https://packagemanager.posit.co/cran";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -55,6 +57,15 @@ impl Config {
         if let Some(snapshot) = &self.project.snapshot {
             validate_snapshot(snapshot)?;
         }
+        if let Some(repo_url) = &self.project.repo_url {
+            validate_repo_url(repo_url)?;
+        }
+        if let (Some(snapshot), Some(repo_url)) = (&self.project.snapshot, &self.project.repo_url) {
+            return Err(Error::Config(format!(
+                "project.snapshot and project.repo-url cannot both be set: `repo-url` is the complete repository URL and is used exactly as written, so okr does not append the snapshot to it. Remove `snapshot`; if the repository is dated, keep the date in the URL, for example `repo-url = \"{}/{snapshot}\"`",
+                repo_url.trim_end_matches('/')
+            )));
+        }
 
         let mut has_cran = false;
         for (name, value) in &self.packages {
@@ -74,9 +85,10 @@ impl Config {
             validate_globs(&entry.exclude, &format!("[references].{name}.exclude"))?;
         }
 
-        if has_cran && self.project.snapshot.is_none() {
+        if has_cran && self.repository().is_none() {
             return Err(Error::Config(
-                "project.snapshot is required when [packages] contains a CRAN entry".into(),
+                "project.snapshot or project.repo-url is required when [packages] contains a CRAN entry"
+                    .into(),
             ));
         }
         Ok(())
@@ -93,13 +105,81 @@ impl Config {
         Ok(entries)
     }
 
+    /// The repository that CRAN declarations resolve against, when the
+    /// project configures one.
     #[must_use]
-    pub fn repository_url(&self) -> &str {
-        self.project
-            .repo_url
-            .as_deref()
-            .unwrap_or(DEFAULT_REPO_URL)
-            .trim_end_matches('/')
+    pub fn repository(&self) -> Option<Repository> {
+        match (&self.project.repo_url, &self.project.snapshot) {
+            (Some(url), _) => Some(Repository::at(url)),
+            (None, Some(date)) => Some(Repository::snapshot(date)),
+            (None, None) => None,
+        }
+    }
+}
+
+/// A CRAN-like package repository: a root URL that serves
+/// `src/contrib/PACKAGES.gz` and the source packages it lists.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Repository {
+    url: String,
+    snapshot: Option<String>,
+}
+
+impl Repository {
+    /// The dated Posit Public Package Manager CRAN snapshot for `date`.
+    #[must_use]
+    pub fn snapshot(date: &str) -> Self {
+        Self {
+            url: format!("{SNAPSHOT_BASE_URL}/{date}"),
+            snapshot: Some(date.to_owned()),
+        }
+    }
+
+    /// The repository at `url`. The URL is used exactly as written: nothing
+    /// is appended to it but `src/contrib` paths, and nothing is inferred
+    /// from its shape.
+    #[must_use]
+    pub fn at(url: &str) -> Self {
+        Self {
+            url: url.trim_end_matches('/').to_owned(),
+            snapshot: None,
+        }
+    }
+
+    /// The repository root, which is the URL that R's `repos` option takes.
+    #[must_use]
+    pub fn url(&self) -> &str {
+        &self.url
+    }
+
+    /// The date of the snapshot, when `project.snapshot` selected this
+    /// repository.
+    #[must_use]
+    pub fn snapshot_date(&self) -> Option<&str> {
+        self.snapshot.as_deref()
+    }
+
+    /// Whether the contents of the repository are known never to change.
+    /// Only a dated snapshot makes that promise; a `repo-url` may name a
+    /// fixed snapshot or a moving repository, and okr cannot tell which.
+    #[must_use]
+    pub const fn is_fixed(&self) -> bool {
+        self.snapshot.is_some()
+    }
+
+    /// The URL of the index of the source packages in the repository.
+    #[must_use]
+    pub fn index_url(&self) -> String {
+        format!("{}/src/contrib/PACKAGES.gz", self.url)
+    }
+}
+
+impl std::fmt::Display for Repository {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.snapshot {
+            Some(date) => write!(formatter, "snapshot {date}"),
+            None => write!(formatter, "the repository at {}", self.url),
+        }
     }
 }
 
@@ -107,8 +187,11 @@ impl Config {
 #[serde(default, deny_unknown_fields, rename_all = "kebab-case")]
 pub struct ProjectConfig {
     pub r_version: Option<String>,
+    /// The `YYYY-MM-DD` date of a Posit Public Package Manager CRAN snapshot.
     pub snapshot: Option<String>,
     pub strict: bool,
+    /// The complete URL of a CRAN-like repository to use instead of a
+    /// `snapshot`. The two keys are mutually exclusive.
     pub repo_url: Option<String>,
 }
 
@@ -346,8 +429,40 @@ fn validate_snapshot(snapshot: &str) -> Result<()> {
             .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
     {
         return Err(Error::Config(format!(
-            "project.snapshot must use YYYY-MM-DD format, got `{snapshot}`"
+            "project.snapshot must be the YYYY-MM-DD date of a Posit Public Package Manager CRAN snapshot, got `{snapshot}`; to use a repository that is identified in any other way, set project.repo-url to its complete URL instead"
         )));
+    }
+    Ok(())
+}
+
+fn validate_repo_url(url: &str) -> Result<()> {
+    let invalid = |requirement: &str| {
+        Err(Error::Config(format!(
+            "project.repo-url {requirement}, got `{url}`"
+        )))
+    };
+    let Some(location) = ["https://", "http://", "file://"]
+        .iter()
+        .find_map(|scheme| url.strip_prefix(scheme))
+    else {
+        return invalid("must be an `https://`, `http://`, or `file://` URL");
+    };
+    if location.trim_matches('/').is_empty() {
+        return invalid("must name a repository");
+    }
+    if url
+        .chars()
+        .any(|character| character.is_whitespace() || character.is_control())
+    {
+        return invalid("must not contain whitespace");
+    }
+    if url.contains(['?', '#']) {
+        return invalid(
+            "must not contain a query or fragment, because okr appends `src/contrib` paths to it",
+        );
+    }
+    if url.trim_end_matches('/').ends_with("/src/contrib") {
+        return invalid("must be the repository root, without the trailing `/src/contrib`");
     }
     Ok(())
 }
@@ -428,7 +543,6 @@ mod tests {
 r-version = "4.5.1"
 snapshot = "2026-06-30"
 strict = false
-repo-url = "https://example.test/cran"
 
 [vendor]
 path = "deps-src"
@@ -459,7 +573,121 @@ bibtex-guide = {{ url = "https://mirrors.mit.edu/CTAN/info/bibtex/tamethebeast.z
         let reparsed = Config::parse(&serialized).unwrap();
         assert_eq!(parsed, reparsed);
         assert_eq!(parsed.declared_entries().unwrap().len(), 9);
-        assert_eq!(parsed.repository_url(), "https://example.test/cran");
+        let repository = parsed.repository().unwrap();
+        assert_eq!(
+            repository.url(),
+            "https://packagemanager.posit.co/cran/2026-06-30"
+        );
+        assert_eq!(repository.snapshot_date(), Some("2026-06-30"));
+        assert!(repository.is_fixed());
+        assert_eq!(repository.to_string(), "snapshot 2026-06-30");
+    }
+
+    #[test]
+    fn repo_url_is_the_complete_repository_url_used_as_written() {
+        // None of these follows the dated layout of the public snapshots, and
+        // none of them is rewritten: only a trailing slash is dropped.
+        for (written, root) in [
+            (
+                "https://ppm.example.test/cran/2026-06-30+Y3JhbiwyOjQ1MjYyMTU7",
+                "https://ppm.example.test/cran/2026-06-30+Y3JhbiwyOjQ1MjYyMTU7",
+            ),
+            (
+                "https://ppm.example.test/internal/latest",
+                "https://ppm.example.test/internal/latest",
+            ),
+            (
+                "https://ppm.example.test/cran/__linux__/noble/2026-06-30",
+                "https://ppm.example.test/cran/__linux__/noble/2026-06-30",
+            ),
+            (
+                "https://cloud.r-project.org/",
+                "https://cloud.r-project.org",
+            ),
+            ("http://localhost:8080", "http://localhost:8080"),
+            ("file:///srv/cran-mirror", "file:///srv/cran-mirror"),
+        ] {
+            let parsed = Config::parse(&format!(
+                "[project]\nrepo-url = \"{written}\"\n[packages]\npkg = \"*\""
+            ))
+            .unwrap();
+            let repository = parsed.repository().unwrap();
+            assert_eq!(repository.url(), root);
+            assert_eq!(
+                repository.index_url(),
+                format!("{root}/src/contrib/PACKAGES.gz")
+            );
+            assert_eq!(repository.snapshot_date(), None);
+            assert!(!repository.is_fixed());
+            assert_eq!(repository.to_string(), format!("the repository at {root}"));
+            let serialized = toml::to_string(&parsed).unwrap();
+            assert_eq!(Config::parse(&serialized).unwrap(), parsed);
+        }
+    }
+
+    #[test]
+    fn snapshot_and_repo_url_are_mutually_exclusive() {
+        let error = Config::parse(
+            "[project]\nsnapshot = \"2026-06-30\"\nrepo-url = \"https://ppm.example.test/cran/\"",
+        )
+        .unwrap_err();
+        assert_eq!(error.exit_code(), 2);
+        let message = error.to_string();
+        assert!(
+            message.contains("project.snapshot and project.repo-url cannot both be set"),
+            "{message}"
+        );
+        // The message names the URL that reads the same repository as the
+        // two keys once did together.
+        assert!(
+            message.contains("`repo-url = \"https://ppm.example.test/cran/2026-06-30\"`"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn snapshot_is_a_date_and_other_identifiers_are_sent_to_repo_url() {
+        for snapshot in ["latest", "2026-6-30", "2026-06-30+Y3JhbiwyOjQ1MjYyMTU7", ""] {
+            let error =
+                Config::parse(&format!("[project]\nsnapshot = \"{snapshot}\"")).unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains("YYYY-MM-DD"), "{message}");
+            assert!(message.contains("project.repo-url"), "{message}");
+        }
+    }
+
+    #[test]
+    fn repo_url_must_be_a_repository_root_url() {
+        for (url, requirement) in [
+            ("", "`https://`, `http://`, or `file://` URL"),
+            (
+                "ppm.example.test/cran",
+                "`https://`, `http://`, or `file://` URL",
+            ),
+            (
+                "ftp://example.test/cran",
+                "`https://`, `http://`, or `file://` URL",
+            ),
+            ("https://", "must name a repository"),
+            ("file:///", "must name a repository"),
+            (
+                "https://example.test/my cran",
+                "must not contain whitespace",
+            ),
+            ("https://example.test/cran?token=1", "query or fragment"),
+            ("https://example.test/cran#latest", "query or fragment"),
+            (
+                "https://example.test/cran/src/contrib/",
+                "without the trailing `/src/contrib`",
+            ),
+        ] {
+            let error = Config::parse(&format!("[project]\nrepo-url = \"{url}\"")).unwrap_err();
+            let message = error.to_string();
+            assert_eq!(error.exit_code(), 2, "{message}");
+            assert!(message.contains("project.repo-url"), "{message}");
+            assert!(message.contains(requirement), "{message}");
+            assert!(message.contains(&format!("got `{url}`")), "{message}");
+        }
     }
 
     #[test]
@@ -567,11 +795,20 @@ bibtex-guide = {{ url = "https://mirrors.mit.edu/CTAN/info/bibtex/tamethebeast.z
     }
 
     #[test]
-    fn cran_requires_a_snapshot_but_remote_only_configs_do_not() {
+    fn cran_requires_a_repository_but_remote_only_configs_do_not() {
         let error = Config::parse("[packages]\npkg = \"*\"").unwrap_err();
-        assert!(error.to_string().contains("project.snapshot"));
+        assert!(error.to_string().contains("project.snapshot"), "{error}");
+        assert!(error.to_string().contains("project.repo-url"), "{error}");
 
-        Config::parse("[packages]\npkg = \"owner/repo@v1\"").unwrap();
+        // Either key supplies the repository.
+        Config::parse("[project]\nsnapshot = \"2026-06-30\"\n[packages]\npkg = \"*\"").unwrap();
+        Config::parse(
+            "[project]\nrepo-url = \"https://ppm.example.test/cran/latest\"\n[packages]\npkg = \"*\"",
+        )
+        .unwrap();
+
+        let remote_only = Config::parse("[packages]\npkg = \"owner/repo@v1\"").unwrap();
+        assert_eq!(remote_only.repository(), None);
     }
 
     #[test]

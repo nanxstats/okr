@@ -4,15 +4,15 @@ icon: lucide/git-fork
 
 # Source declarations
 
-`okr` supports CRAN snapshot entries and the milestone 0.1 subset of the R
+`okr` supports CRAN repository entries and the milestone 0.1 subset of the R
 `Remotes` syntax. Package dependencies are not discovered transitively: every
 package or reference repository you want in the source tree must be declared.
 
 ## CRAN packages
 
 Under `[packages]`, `"*"` selects the package version present in the configured
-dated snapshot. An explicit version pins that version; if it is no longer in
-the snapshot index, `okr` uses the corresponding CRAN archive URL.
+repository. An explicit version pins that version; if it is no longer in the
+repository index, `okr` uses the corresponding archive URL in that repository.
 
 ```toml
 [project]
@@ -25,6 +25,11 @@ gsDesign = "3.6.4"
 
 `okr add rpact` writes the wildcard form. Resolution is a lookup in
 `PACKAGES.gz`, not a dependency or version-constraint solver.
+
+`snapshot` selects a dated Posit (Public) Package Manager CRAN snapshot. To
+resolve CRAN packages from any other repository, set `repo-url` to its
+complete URL instead; see
+[package repository](configuration.md#package-repository).
 
 ## Remote grammar
 

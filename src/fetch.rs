@@ -291,11 +291,7 @@ impl Fetcher {
         label: &str,
     ) -> Result<CachedArtifact> {
         self.fetch_url_if_exists(url, expected_sha256, label)?
-            .ok_or_else(|| {
-                Error::Fetch(format!(
-                    "could not fetch {label} from {url}: HTTP 404 Not Found"
-                ))
-            })
+            .ok_or_else(|| not_found(label, url))
     }
 
     /// Return the artifact previously fetched from `url` when the cache still
@@ -313,13 +309,12 @@ impl Fetcher {
         expected_sha256: Option<&str>,
         label: &str,
     ) -> Result<Option<CachedArtifact>> {
-        let key = url_key(url);
         if let Some(expected) = expected_sha256
             && let Some(hit) = self.cache.get(expected)?
         {
             return Ok(Some(hit));
         }
-        if let Some(hit) = self.cache.lookup(&key)? {
+        if let Some(hit) = self.cache.lookup(&url_key(url))? {
             if let Some(expected) = expected_sha256
                 && hit.sha256 != normalize_digest(expected)?
             {
@@ -331,14 +326,47 @@ impl Fetcher {
             }
             return Ok(Some(hit));
         }
+        self.download(url, expected_sha256, label)
+    }
+
+    /// Fetch `url` again even when the cache holds an earlier response, for
+    /// content that may change in place, and index the new response under
+    /// the URL. Offline, the most recent response stands in. Like
+    /// [`Self::fetch_url_if_exists`], this returns `None` only when the URL
+    /// does not exist.
+    pub(crate) fn refresh_url_if_exists(
+        &self,
+        url: &str,
+        label: &str,
+    ) -> Result<Option<CachedArtifact>> {
+        if self.offline
+            && let Some(hit) = self.cached_url(url)?
+        {
+            return Ok(Some(hit));
+        }
+        self.download(url, None, label)
+    }
+
+    /// Download `url` into the cache and index the artifact under the URL,
+    /// replacing whatever the URL pointed to before.
+    fn download(
+        &self,
+        url: &str,
+        expected_sha256: Option<&str>,
+        label: &str,
+    ) -> Result<Option<CachedArtifact>> {
         if self.offline {
             return Err(Error::Fetch(format!(
                 "offline mode: missing cached artifact for {label} ({url})"
             )));
         }
+        let key = url_key(url);
 
         if url.starts_with("file://") {
             let path = file_url_path(url)?;
+            if !path.try_exists()? {
+                return Ok(None);
+            }
             return self.cache.put_file(&key, &path, expected_sha256).map(Some);
         }
 
@@ -433,6 +461,15 @@ fn url_key(url: &str) -> String {
     format!("url:{url}")
 }
 
+fn not_found(label: &str, url: &str) -> Error {
+    let reason = if url.starts_with("file://") {
+        "no such file"
+    } else {
+        "HTTP 404 Not Found"
+    };
+    Error::Fetch(format!("could not fetch {label} from {url}: {reason}"))
+}
+
 fn normalize_digest(digest: &str) -> Result<&str> {
     let digest = digest.strip_prefix("sha256:").unwrap_or(digest);
     if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -446,7 +483,7 @@ fn normalize_digest(digest: &str) -> Result<&str> {
 fn file_url_path(url: &str) -> Result<PathBuf> {
     let encoded = url
         .strip_prefix("file://")
-        .ok_or_else(|| Error::Fetch(format!("invalid local fixture URL `{url}`")))?;
+        .ok_or_else(|| Error::Fetch(format!("invalid file URL `{url}`")))?;
     let encoded = encoded.strip_prefix("localhost").unwrap_or(encoded);
     let bytes = encoded.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
@@ -665,6 +702,79 @@ mod tests {
             .unwrap();
         assert!(offline.from_cache);
         assert_eq!(offline.sha256, online.sha256);
+    }
+
+    #[test]
+    fn refreshing_a_url_replaces_its_cached_response_and_replays_it_offline() {
+        let root = tempdir().unwrap();
+        let source = root.path().join("PACKAGES.gz");
+        let url = format!("file://{}", source.display());
+        let cache = Cache::new(root.path().join("cache"));
+        let online = Fetcher::new(cache.clone(), false).unwrap();
+        let offline = Fetcher::new(cache, true).unwrap();
+        let read = |artifact: super::CachedArtifact| fs::read(artifact.path).unwrap();
+
+        assert!(
+            offline
+                .refresh_url_if_exists(&url, "index")
+                .unwrap_err()
+                .to_string()
+                .contains("offline mode: missing cached artifact for index")
+        );
+
+        fs::write(&source, b"first").unwrap();
+        let first = online
+            .refresh_url_if_exists(&url, "index")
+            .unwrap()
+            .unwrap();
+        assert_eq!(read(first), b"first");
+
+        // An ordinary fetch keeps serving the response it cached; a refresh
+        // reads the URL again and moves the cache along with it.
+        fs::write(&source, b"second").unwrap();
+        let kept = online.fetch_url(&url, None, "index").unwrap();
+        assert!(kept.from_cache);
+        assert_eq!(read(kept), b"first");
+        let second = online
+            .refresh_url_if_exists(&url, "index")
+            .unwrap()
+            .unwrap();
+        assert!(!second.from_cache);
+        assert_eq!(read(second), b"second");
+        assert_eq!(
+            read(online.fetch_url(&url, None, "index").unwrap()),
+            b"second"
+        );
+
+        // Offline, the most recent response stands in for the URL.
+        fs::remove_file(&source).unwrap();
+        let replayed = offline
+            .refresh_url_if_exists(&url, "index")
+            .unwrap()
+            .unwrap();
+        assert!(replayed.from_cache);
+        assert_eq!(read(replayed), b"second");
+
+        // Online, a URL that has gone away is reported as missing.
+        assert_eq!(online.refresh_url_if_exists(&url, "index").unwrap(), None);
+    }
+
+    #[test]
+    fn a_missing_local_file_is_a_fetch_error_that_names_it() {
+        let root = tempdir().unwrap();
+        let url = format!("file://{}", root.path().join("absent.tar.gz").display());
+        let fetcher = Fetcher::new(Cache::new(root.path().join("cache")), false).unwrap();
+
+        assert_eq!(
+            fetcher.fetch_url_if_exists(&url, None, "fixture").unwrap(),
+            None
+        );
+        let error = fetcher.fetch_url(&url, None, "fixture").unwrap_err();
+        assert_eq!(error.exit_code(), 3);
+        assert_eq!(
+            error.to_string(),
+            format!("could not fetch fixture from {url}: no such file")
+        );
     }
 
     #[test]
