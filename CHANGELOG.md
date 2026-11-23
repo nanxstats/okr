@@ -1,5 +1,11 @@
 # Changelog
 
+## okr (development version)
+
+### Dependencies
+
+- Adopt a 7-day dependency cooldown for development with Cargo 1.100+ (#79).
+
 ## okr 0.1.12
 
 ### Improvements

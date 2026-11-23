@@ -121,6 +121,13 @@ same layer, followed by an end-to-end test when command behavior changes.
 Avoid new dependencies; if one is necessary beyond the list in `SPEC.md`
 section 15, document the reason next to it in `Cargo.toml`.
 
+`.cargo/config.toml` sets a 7-day dependency cooldown
+(`registry.global-min-publish-age`, Cargo 1.100+). Refresh `Cargo.lock` with a
+plain `cargo update` and accept the versions it holds back. Bypass the cooldown
+only for a fix the project needs, with
+`CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update <crate> --precise <version>`,
+and say why in `CHANGELOG.md`.
+
 Run the release gates before handing off:
 
 ```console

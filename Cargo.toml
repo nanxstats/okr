@@ -12,6 +12,7 @@ keywords = ["r", "reproducibility", "vendoring", "ai", "agents"]
 categories = ["command-line-utilities", "development-tools"]
 authors = ["Nan Xiao <me@nanx.me>"]
 exclude = [
+    ".cargo/",
     "AGENTS.md",
     "SPEC.md",
     "vendor/",
