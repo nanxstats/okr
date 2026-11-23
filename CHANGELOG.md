@@ -7,7 +7,7 @@
 - Build and deploy the documentation site in separate workflow jobs, so a
   deploy no longer fails intermittently when it runs before GitHub lists the
   uploaded site artifact, and a failed deploy can be re-run on its own. The
-  workflow can now also be run by hand.
+  workflow can now also be run by hand (#83).
 
 ## okr 0.1.13
 
