@@ -309,6 +309,10 @@ fn is_executable(path: &Path) -> bool {
 mod tests {
     use std::collections::BTreeMap;
     use std::fs;
+    #[cfg(unix)]
+    use std::path::Path;
+    #[cfg(unix)]
+    use std::process::Command;
 
     use tempfile::tempdir;
 
@@ -360,16 +364,12 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn fake_rscript_is_invoked_without_writing_a_library() {
-        use std::os::unix::fs::PermissionsExt;
-
         let directory = tempdir().unwrap();
         let executable = directory.path().join("Rscript");
-        fs::write(
+        write_fake_rscript(
             &executable,
             "#!/bin/sh\ncase \" $* \" in *\" --vanilla \"*) exit 9;; esac\nprintf 'startup output\\n__OKR_RLIB_INSPECTION_V1_BEGIN__\\n4.5.1\\ntinyone\\t9.9.9\\n__OKR_RLIB_INSPECTION_V1_END__\\n'\n",
-        )
-        .unwrap();
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        );
         assert_eq!(
             inspect_executable(&executable),
             Inspection::Available {
@@ -383,45 +383,55 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn fake_rscript_runs_from_the_project_directory() {
-        use std::os::unix::fs::PermissionsExt;
-
         let directory = tempdir().unwrap();
         let project = tempdir().unwrap();
         fs::write(project.path().join("project-startup"), "").unwrap();
         let executable = directory.path().join("Rscript");
-        fs::write(
+        write_fake_rscript(
             &executable,
             "#!/bin/sh\ntest -f project-startup || exit 9\nprintf '__OKR_RLIB_INSPECTION_V1_BEGIN__\\n4.5.1\\ntinyone\\t1.0.0\\n__OKR_RLIB_INSPECTION_V1_END__\\n'\n",
-        )
-        .unwrap();
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        );
 
-        assert!(matches!(
-            inspect_executable_in(&executable, project.path()),
-            Inspection::Available { .. }
-        ));
+        let inspection = inspect_executable_in(&executable, project.path());
+        assert!(
+            matches!(inspection, Inspection::Available { .. }),
+            "{inspection:?}"
+        );
     }
 
     #[cfg(unix)]
     #[test]
     fn version_detection_runs_from_the_project_directory() {
-        use std::os::unix::fs::PermissionsExt;
-
         let directory = tempdir().unwrap();
         let project = tempdir().unwrap();
         fs::write(project.path().join("project-startup"), "").unwrap();
         let executable = directory.path().join("Rscript");
-        fs::write(
+        write_fake_rscript(
             &executable,
             "#!/bin/sh\ntest -f project-startup || exit 9\nprintf 'startup output\\n__OKR_R_VERSION_V1_BEGIN__\\n4.5.2\\n__OKR_R_VERSION_V1_END__\\n'\n",
-        )
-        .unwrap();
-        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        );
 
         assert_eq!(
             detect_r_version_executable_in(&executable, project.path()).unwrap(),
             "4.5.2"
         );
+    }
+
+    /// Writes an executable fake `Rscript` without this process ever opening it
+    /// for writing. Linux refuses to execute a file that any process holds open
+    /// for writing (`ETXTBSY`), and other tests spawn `git` concurrently: a child
+    /// forked while `fs::write` held the file open keeps that descriptor until
+    /// it execs. Writing through a short-lived `sh` confines the descriptor to
+    /// a process that has exited before the script runs.
+    #[cfg(unix)]
+    fn write_fake_rscript(path: &Path, script: &str) {
+        let status = Command::new("sh")
+            .args(["-c", r#"printf '%s' "$1" > "$2" && chmod 755 "$2""#, "sh"])
+            .arg(script)
+            .arg(path)
+            .status()
+            .unwrap();
+        assert!(status.success(), "could not write {}", path.display());
     }
 
     #[test]
