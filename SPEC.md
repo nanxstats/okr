@@ -500,9 +500,8 @@ companion installation command or write to the library.
 arrays and sorted by name within each array.
 
 ```toml
-version = 2
+version = 3
 okr-version = "0.1.0"
-generated = "2026-06-30T00:00:00Z"
 snapshot = "2026-06-30"
 config-digest = "sha256:..."
 environment-digest = "sha256:..."
@@ -538,14 +537,20 @@ tree-digest = "sha256:..."
 `version` is the lock format version. `okr` reads and writes one version;
 `sync` regenerates a lock written in an older format, and `status` and
 `verify` explain that `sync` is needed. Version 1 additionally recorded an
-`artifact-digest` per entry.
+`artifact-digest` per entry, and versions 1 and 2 a `generated` key.
 
 `snapshot` is present only when the lock contains a CRAN package that was
 resolved from `project.snapshot`. A package resolved from `project.repo-url`
 has no snapshot date to record; its `url` starts with the repository URL and
 identifies the repository by itself.
-`generated` is deterministic: snapshot midnight when a snapshot is present,
-otherwise the Unix epoch. It is never the wall-clock sync time.
+
+The lock records no time. Rebuilding the same sources must write the same
+lock, byte for byte, and the moment of a sync is the one input that would
+differ each time. The `generated` key of versions 1 and 2 could for that
+reason hold only a placeholder: snapshot midnight, or the Unix epoch when
+there was no snapshot. It read as an incorrect time and added nothing to
+`snapshot`. The version control history of the committed lock says when it
+changed.
 
 The allowed fetch methods are `tarball`, `forge-tarball`, `gh`, and `git-clone`.
 `tarball` is the direct download of a declared CRAN or `url::` archive and is

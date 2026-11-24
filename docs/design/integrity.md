@@ -84,13 +84,26 @@ and so `verify` can detect a manually edited lock.
 Other deterministic lock properties include:
 
 - packages and references sorted by name within their kind;
-- `generated` set to snapshot midnight, or the Unix epoch for a lock that
-  records no snapshot, rather than wall-clock time;
+- no record of when the lock was written;
 - a normalized configuration digest for staleness detection; and
 - stable TOML serialization.
 
 Comments and presentation changes in `okr.toml` do not affect its normalized
 configuration digest. Behavioral configuration changes do.
+
+## Why the lock records no time
+
+Syncing the same sources again writes the same lock, byte for byte. That holds
+on another machine, and after a fresh clone whose vendor tree is ignored by
+Git and has to be rebuilt. The moment of a sync is the one input that would
+differ each time, so recording it would change a committed file on every
+rebuild.
+
+Earlier lock formats had a `generated` key that held a placeholder instead:
+midnight of the snapshot date, or `1970-01-01T00:00:00Z` for a lock without a
+snapshot. It read as an incorrect time and added nothing to `snapshot`, so it
+was removed. The version control history of `okr.lock` says when the lock
+changed.
 
 ## Why fetch method is provenance
 
@@ -110,8 +123,8 @@ tree.
 `okr.lock` starts with a `version` key. Each okr release reads and writes one
 lock format version. When `sync` finds a lock written in an older format, it
 regenerates the lock and says so; `status` and `verify` report the older
-version and ask for `okr sync`. The current version is 2. Version 1 also
-recorded an artifact digest per entry.
+version and ask for `okr sync`. The current version is 3. Version 1 also
+recorded an artifact digest per entry, and versions 1 and 2 a `generated` key.
 
 ## What `verify` checks
 

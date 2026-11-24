@@ -16,15 +16,16 @@ use crate::{Error, Result};
 /// The `okr.lock` format version this release reads and writes.
 ///
 /// Version 1 recorded an `artifact-digest` per entry. Version 2 attests each
-/// entry with its aggregate `tree-digest` only.
-pub const LOCK_VERSION: u32 = 2;
+/// entry with its aggregate `tree-digest` only. Version 3 drops the
+/// `generated` key: it held snapshot midnight or the Unix epoch, never the
+/// time the lock was written.
+pub const LOCK_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "kebab-case")]
 pub struct Lockfile {
     pub version: u32,
     pub okr_version: String,
-    pub generated: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub snapshot: Option<String>,
     pub config_digest: String,
@@ -132,7 +133,6 @@ impl Lockfile {
         let mut lock = Self {
             version: LOCK_VERSION,
             okr_version: env!("CARGO_PKG_VERSION").into(),
-            generated: deterministic_generated(snapshot.as_deref()),
             snapshot,
             config_digest: config_digest(config)?,
             environment_digest: String::new(),
@@ -364,13 +364,6 @@ fn source_fields(
             Some(commit.clone()),
         ),
     }
-}
-
-fn deterministic_generated(snapshot: Option<&str>) -> String {
-    snapshot.map_or_else(
-        || "1970-01-01T00:00:00Z".into(),
-        |date| format!("{date}T00:00:00Z"),
-    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -712,7 +705,6 @@ mod tests {
         Lockfile {
             version: LOCK_VERSION,
             okr_version: "0.1.0".into(),
-            generated: "2026-06-30T00:00:00Z".into(),
             snapshot: Some("2026-06-30".into()),
             config_digest: format!("sha256:{}", "a".repeat(64)),
             environment_digest: format!("sha256:{}", "b".repeat(64)),
@@ -795,8 +787,17 @@ mod tests {
         assert_eq!(Lockfile::outdated_version(&path).unwrap(), None);
         assert!(Lockfile::load(&path).is_ok());
 
-        let legacy = current
-            .replacen(&format!("version = {LOCK_VERSION}"), "version = 1", 1)
+        // Version 2 carried a `generated` key in the header, and version 1
+        // an `artifact-digest` per entry as well.
+        let version_2 = current
+            .replacen(&format!("version = {LOCK_VERSION}"), "version = 2", 1)
+            .replacen(
+                "snapshot = ",
+                "generated = \"2026-06-30T00:00:00Z\"\nsnapshot = ",
+                1,
+            );
+        let version_1 = version_2
+            .replacen("version = 2", "version = 1", 1)
             .replacen(
                 "fetch-method = \"tarball\"\n",
                 &format!(
@@ -805,15 +806,40 @@ mod tests {
                 ),
                 1,
             );
-        fs::write(&path, legacy).unwrap();
-        assert_eq!(Lockfile::outdated_version(&path).unwrap(), Some(1));
-        let error = Lockfile::load(&path).unwrap_err().to_string();
-        assert!(error.contains("uses lock version 1"), "{error}");
-        assert!(
-            error.contains(&format!("writes version {LOCK_VERSION}")),
-            "{error}"
+        for (version, legacy) in [(1, version_1), (2, version_2)] {
+            assert!(legacy.contains("generated = "), "{legacy}");
+            fs::write(&path, legacy).unwrap();
+            assert_eq!(Lockfile::outdated_version(&path).unwrap(), Some(version));
+            let error = Lockfile::load(&path).unwrap_err().to_string();
+            assert!(
+                error.contains(&format!("uses lock version {version}")),
+                "{error}"
+            );
+            assert!(
+                error.contains(&format!("writes version {LOCK_VERSION}")),
+                "{error}"
+            );
+            assert!(error.contains("run `okr sync`"), "{error}");
+        }
+    }
+
+    #[test]
+    fn the_lock_records_no_time() {
+        // Regression test for #84. A rebuilt lock must match byte for byte,
+        // so it has no time to record, and the `generated` placeholder that
+        // stood in for one is gone.
+        let encoded = example_lock().to_stable_toml().unwrap();
+        assert!(!encoded.contains("generated"), "{encoded}");
+        assert!(encoded.contains("snapshot = \"2026-06-30\"\n"), "{encoded}");
+
+        // The key is not accepted back in the current format either.
+        let stale = encoded.replacen(
+            "snapshot = ",
+            "generated = \"2026-06-30T00:00:00Z\"\nsnapshot = ",
+            1,
         );
-        assert!(error.contains("run `okr sync`"), "{error}");
+        let error = toml::from_str::<Lockfile>(&stale).unwrap_err().to_string();
+        assert!(error.contains("unknown field `generated`"), "{error}");
     }
 
     #[test]
@@ -858,7 +884,6 @@ mod tests {
         let mut lock = Lockfile {
             version: LOCK_VERSION,
             okr_version: "0.1.0".into(),
-            generated: "1970-01-01T00:00:00Z".into(),
             snapshot: None,
             config_digest: format!("sha256:{}", "1".repeat(64)),
             environment_digest: String::new(),

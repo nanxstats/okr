@@ -83,8 +83,9 @@ Deterministic output is a correctness requirement, not a cosmetic preference.
   inventories explicitly.
 - Tree inventory records are `path<TAB>file-sha256`, joined with LF and no
   trailing newline. Paths are UTF-8 and `/`-normalized.
-- The lock's `generated` value is snapshot midnight, or the Unix epoch for a
-  lock that records no snapshot; do not replace it with wall-clock time.
+- The lock records no time. Do not reintroduce `generated` or add another
+  timestamp: wall-clock time breaks byte-identical rebuilds, and a placeholder
+  derived from the snapshot reads as an incorrect time.
 - Per-file hashes are an internal input to each aggregate tree digest; do not
   serialize the inventory in the lock or manifest. The aggregate tree digests
   are part of the environment digest.

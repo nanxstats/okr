@@ -2,12 +2,11 @@
 source: src/lock.rs
 expression: encoded
 ---
-version = 2
+version = 3
 okr-version = "0.1.0"
-generated = "2026-06-30T00:00:00Z"
 snapshot = "2026-06-30"
 config-digest = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-environment-digest = "sha256:3c004290a53fb8f402c5ba4c33fbede17fd2c7d0405affb90a6940324f8dab31"
+environment-digest = "sha256:f9c2c0e769eff6e15d805466cbb87b3724da0d14b17950720c69e8993ca1f64b"
 
 [[package]]
 name = "rpact"

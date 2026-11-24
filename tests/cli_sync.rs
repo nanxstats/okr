@@ -39,7 +39,7 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
     let first_markdown = fs::read(project.path().join("deps-src/_manifest.md")).unwrap();
     let lock_text = String::from_utf8(first_lock.clone()).unwrap();
     let manifest: serde_json::Value = serde_json::from_slice(&first_json).unwrap();
-    assert!(lock_text.starts_with("version = 2\n"));
+    assert!(lock_text.starts_with("version = 3\n"));
     // The repository is the `repo-url` exactly as written. It names no
     // snapshot date, so the lock records none.
     assert!(
@@ -50,10 +50,9 @@ fn cran_sync_offline_noop_and_mutation_verification_need_no_host_tools() {
         "{lock_text}"
     );
     assert!(!lock_text.contains("snapshot = "), "{lock_text}");
-    assert!(
-        lock_text.contains("generated = \"1970-01-01T00:00:00Z\"\n"),
-        "{lock_text}"
-    );
+    // Regression test for #84: nor does it record a time. A `generated` key
+    // used to show the Unix epoch here.
+    assert!(!lock_text.contains("generated"), "{lock_text}");
     assert!(!lock_text.contains(".files]"));
     assert!(!lock_text.contains("artifact-digest"));
     assert_eq!(lock_text.matches("tree-digest = \"sha256:").count(), 1);
@@ -208,9 +207,12 @@ fn snapshot_selects_the_dated_public_snapshot_and_is_recorded_in_the_lock() {
         .stdout(predicate::str::contains("synchronized 1 source entry"));
     let lock_text = fs::read_to_string(project.path().join("okr.lock")).unwrap();
     assert!(
-        lock_text.contains("generated = \"2026-06-30T00:00:00Z\"\nsnapshot = \"2026-06-30\"\n"),
+        lock_text.contains("snapshot = \"2026-06-30\"\n"),
         "{lock_text}"
     );
+    // Regression test for #84: the date is recorded once. A `generated` key
+    // used to repeat it as midnight, which read as the time of the sync.
+    assert!(!lock_text.contains("generated"), "{lock_text}");
     assert!(
         lock_text.contains(&format!(
             "url = \"{snapshot}/src/contrib/tinyone_1.0.0.tar.gz\"\n"
@@ -350,44 +352,59 @@ fn verbose_sync_logs_each_source_without_a_terminal() {
 
 #[test]
 fn sync_regenerates_a_lock_written_in_an_older_format() {
-    let project = tempdir().unwrap();
-    let cache = project.path().join("cache");
-    let empty_path = project.path().join("empty-path");
-    fs::create_dir(&empty_path).unwrap();
-    write_cran_config(project.path());
+    // Version 1 recorded an `artifact-digest` per entry, and versions 1 and 2
+    // a `generated` key in the header.
     let zeros = "0".repeat(64);
-    fs::write(
-        project.path().join("okr.lock"),
+    let entry = |artifact_digest: &str| {
         format!(
-            "version = 1\nokr-version = \"0.1.8\"\ngenerated = \"2026-06-30T00:00:00Z\"\nsnapshot = \"2026-06-30\"\nconfig-digest = \"sha256:{zeros}\"\nenvironment-digest = \"sha256:{zeros}\"\n\n[[package]]\nname = \"tinyone\"\nversion = \"1.0.0\"\nsource = \"cran\"\nurl = \"https://example.test/tinyone_1.0.0.tar.gz\"\nfetch-method = \"tarball\"\nartifact-digest = \"sha256:{zeros}\"\ntree-digest = \"sha256:{zeros}\"\nlicense = \"MIT\"\n"
-        ),
-    )
-    .unwrap();
+            "\n[[package]]\nname = \"tinyone\"\nversion = \"1.0.0\"\nsource = \"cran\"\nurl = \"https://example.test/tinyone_1.0.0.tar.gz\"\nfetch-method = \"tarball\"\n{artifact_digest}tree-digest = \"sha256:{zeros}\"\nlicense = \"MIT\"\n"
+        )
+    };
+    let version_1 = format!(
+        "version = 1\nokr-version = \"0.1.8\"\ngenerated = \"2026-06-30T00:00:00Z\"\nsnapshot = \"2026-06-30\"\nconfig-digest = \"sha256:{zeros}\"\nenvironment-digest = \"sha256:{zeros}\"\n{}",
+        entry(&format!("artifact-digest = \"sha256:{zeros}\"\n"))
+    );
+    let version_2 = format!(
+        "version = 2\nokr-version = \"0.1.13\"\ngenerated = \"1970-01-01T00:00:00Z\"\nconfig-digest = \"sha256:{zeros}\"\nenvironment-digest = \"sha256:{zeros}\"\n{}",
+        entry("")
+    );
 
-    okr(project.path(), &cache, &empty_path)
-        .arg("verify")
-        .assert()
-        .code(2)
-        .stderr(predicate::str::contains("uses lock version 1"))
-        .stderr(predicate::str::contains("run `okr sync`"));
+    for (version, legacy) in [(1, version_1), (2, version_2)] {
+        let project = tempdir().unwrap();
+        let cache = project.path().join("cache");
+        let empty_path = project.path().join("empty-path");
+        fs::create_dir(&empty_path).unwrap();
+        write_cran_config(project.path());
+        fs::write(project.path().join("okr.lock"), legacy).unwrap();
 
-    okr(project.path(), &cache, &empty_path)
-        .arg("sync")
-        .assert()
-        .success()
-        .stderr(predicate::str::contains(
-            "okr.lock uses lock version 1; regenerating it as version 2",
-        ))
-        .stdout(predicate::str::contains("synchronized 1 source entry"));
-    let lock_text = fs::read_to_string(project.path().join("okr.lock")).unwrap();
-    assert!(lock_text.starts_with("version = 2\n"));
-    assert!(!lock_text.contains("artifact-digest"));
+        okr(project.path(), &cache, &empty_path)
+            .arg("verify")
+            .assert()
+            .code(2)
+            .stderr(predicate::str::contains(format!(
+                "uses lock version {version}"
+            )))
+            .stderr(predicate::str::contains("run `okr sync`"));
 
-    okr(project.path(), &cache, &empty_path)
-        .arg("verify")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("verified sha256:"));
+        okr(project.path(), &cache, &empty_path)
+            .arg("sync")
+            .assert()
+            .success()
+            .stderr(predicate::str::contains(format!(
+                "okr.lock uses lock version {version}; regenerating it as version 3"
+            )))
+            .stdout(predicate::str::contains("synchronized 1 source entry"));
+        let lock_text = fs::read_to_string(project.path().join("okr.lock")).unwrap();
+        assert!(lock_text.starts_with("version = 3\n"), "{lock_text}");
+        assert!(!lock_text.contains("artifact-digest"), "{lock_text}");
+        assert!(!lock_text.contains("generated"), "{lock_text}");
+
+        okr(project.path(), &cache, &empty_path)
+            .arg("verify")
+            .assert()
+            .success()
+            .stdout(predicate::str::contains("verified sha256:"));
+    }
 }
 
 #[test]

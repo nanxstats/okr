@@ -456,7 +456,6 @@ mod tests {
         Lockfile {
             version: crate::lock::LOCK_VERSION,
             okr_version: "0.1.0".into(),
-            generated: "1970-01-01T00:00:00Z".into(),
             snapshot: None,
             config_digest: "sha256:config".into(),
             environment_digest: "sha256:environment".into(),

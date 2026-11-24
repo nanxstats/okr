@@ -1297,7 +1297,6 @@ mod tests {
         let lock = Lockfile {
             version: crate::lock::LOCK_VERSION,
             okr_version: env!("CARGO_PKG_VERSION").into(),
-            generated: "1970-01-01T00:00:00Z".into(),
             snapshot: None,
             config_digest: "sha256:x".into(),
             environment_digest: "sha256:y".into(),
@@ -1454,7 +1453,6 @@ mod tests {
         let lock = Lockfile {
             version: crate::lock::LOCK_VERSION,
             okr_version: "0.1.0".into(),
-            generated: "2026-08-11T00:00:00Z".into(),
             snapshot: None,
             config_digest: "sha256:x".into(),
             environment_digest: "sha256:y".into(),
