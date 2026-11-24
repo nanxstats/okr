@@ -442,7 +442,6 @@ mod tests {
         let lock = Lockfile {
             version: LOCK_VERSION,
             okr_version: "0.1.0".into(),
-            generated: "2026-06-30T00:00:00Z".into(),
             snapshot: Some("2026-06-30".into()),
             config_digest: format!("sha256:{}", "a".repeat(64)),
             environment_digest: format!("sha256:{}", "b".repeat(64)),

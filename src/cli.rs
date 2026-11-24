@@ -1080,7 +1080,6 @@ mod tests {
         let lock = |packages: Vec<LockedPackage>| Lockfile {
             version: LOCK_VERSION,
             okr_version: env!("CARGO_PKG_VERSION").into(),
-            generated: "1970-01-01T00:00:00Z".into(),
             snapshot: None,
             config_digest: format!("sha256:{}", "b".repeat(64)),
             environment_digest: format!("sha256:{}", "c".repeat(64)),

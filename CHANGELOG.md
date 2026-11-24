@@ -1,5 +1,22 @@
 # Changelog
 
+## okr (development version)
+
+### Bug fixes
+
+- Remove the `generated` key from `okr.lock` (#84). It looked like the time
+  the lock was written, but it never was: the lock is deterministic, so the
+  key held midnight of `project.snapshot`, or `1970-01-01T00:00:00Z` for a
+  lock without a snapshot, such as one resolved from `project.repo-url`.
+  The lock now records no time. The snapshot date is still recorded as
+  `snapshot`.
+
+  The lock format version is now 3. `okr sync` regenerates a version 2 lock
+  with a warning, while `okr status` and `okr verify` ask for `okr sync`.
+  The environment digest hashes the lock format version, so the regenerated
+  lock and `_manifest.json` carry a new one even when every locked source and
+  tree digest is unchanged.
+
 ## okr 0.1.13
 
 ### Breaking changes
